@@ -541,10 +541,13 @@ function TemplateSelector({
   }
 
   useEffect(() => {
-    fetchTemplates();
+    async function loadTemplates() {
+      await fetchTemplates();
+    }
+    loadTemplates();
   }, []);
 
-  async function useTemplate(id: string) {
+  async function applyTemplate(id: string) {
     const res = await fetch(apiUrl(`/templates/import/${id}`), {
       method: "POST",
       headers: {
@@ -596,7 +599,7 @@ function TemplateSelector({
           <Button
             size="sm"
             className="mt-4 w-full"
-            onClick={() => useTemplate(t.id)}
+            onClick={() => applyTemplate(t.id)}
           >
             Use Template
           </Button>

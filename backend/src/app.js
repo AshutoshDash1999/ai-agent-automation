@@ -15,6 +15,7 @@ const systemRoutes = require("./routes/system.routes");
 const templateRoutes = require("./routes/template.routes");
 const memoryRoutes = require("./routes/memory.routes");
 const assistantRoutes = require("./routes/assistant.routes");
+const telemetryRoutes = require("./routes/telemetry.routes");
 require("dotenv").config();
 
 const app = express();
@@ -42,6 +43,7 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/system", systemRoutes);
 app.use("/api/memory", memoryRoutes);
 app.use("/api/assistant", assistantRoutes);
+app.use("/api/telemetry", telemetryRoutes);
 
 // generic 404
 app.use((req, res) => res.status(404).json({ error: "Not found" }));

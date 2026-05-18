@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +68,7 @@ function ActivitySkeleton() {
 
 function DashboardPageInner() {
   const { setContext, clearContext } = useAssistantContext();
+  const [now] = useState(() => Date.now());
 
   const { data: stats, loading: statsLoading } =
     useApi<DashboardStats>("/dashboard/stats");
@@ -103,7 +104,7 @@ function DashboardPageInner() {
      Helpers
   ------------------------------ */
   function timeAgo(dateString: string) {
-    const diff = Date.now() - new Date(dateString).getTime();
+    const diff = now - new Date(dateString).getTime();
     const minutes = Math.floor(diff / 60000);
 
     if (minutes < 1) return "just now";

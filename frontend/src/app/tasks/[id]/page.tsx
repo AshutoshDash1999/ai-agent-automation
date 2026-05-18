@@ -149,27 +149,32 @@ export default function TaskDetailPage() {
     }
   }
 
-  async function fetchAgent(agentId: string) {
+  useEffect(() => {
+    const agentId = task?.agentId;
     if (!agentId) return;
 
-    try {
-      const res = await fetch(apiUrl(`/agents/${agentId}`), {
-        headers: {
-          Authorization: "Bearer " + localStorage.getItem("token"),
-        },
-      });
+    let cancelled = false;
 
-      const data = await res.json();
-      if (data.ok) setAgent(data.agent);
-    } catch (err) {
-      console.error("Failed to fetch agent", err);
-    }
-  }
+    async function loadAgent() {
+      try {
+        const res = await fetch(apiUrl(`/agents/${agentId}`), {
+          headers: {
+            Authorization: "Bearer " + localStorage.getItem("token"),
+          },
+        });
 
-  useEffect(() => {
-    if (task?.agentId) {
-      fetchAgent(task.agentId);
+        const data = await res.json();
+        if (data.ok && !cancelled) setAgent(data.agent);
+      } catch (err) {
+        console.error("Failed to fetch agent", err);
+      }
     }
+
+    loadAgent();
+
+    return () => {
+      cancelled = true;
+    };
   }, [task?.agentId]);
 
   // Poll while running

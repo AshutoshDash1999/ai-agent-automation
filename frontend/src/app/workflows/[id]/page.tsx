@@ -587,7 +587,10 @@ function TaskItem({ taskId }: { taskId: string }) {
   }
 
   useEffect(() => {
-    fetchTask();
+    async function loadTask() {
+      await fetchTask();
+    }
+    loadTask();
   }, [taskId]);
 
   if (!task) {

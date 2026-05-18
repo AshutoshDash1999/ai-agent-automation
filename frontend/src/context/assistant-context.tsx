@@ -55,7 +55,7 @@ export interface AssistantRuntimeContext {
   /* -------- Step (inside workflow) -------- */
   stepId?: string;
   stepName?: string;
-  stepType?: "LLM" | "HTTP" | "Tool" | "Delay";
+  stepType?: "LLM" | "HTTP" | "Tool" | "Delay" | "Document";
   stepDescription?: string;
 
   /* -------- Failed Step -------- */
@@ -70,7 +70,7 @@ export interface AssistantRuntimeContext {
   builderSteps?: {
     id: string;
     name: string;
-    type: "LLM" | "HTTP" | "Tool" | "Delay";
+    type: "LLM" | "HTTP" | "Tool" | "Delay" | "Document" | "Condition" | "Switch";
     summary: string;
   }[];
 

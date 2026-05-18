@@ -81,7 +81,10 @@ export default function MemoryPage() {
   }
 
   useEffect(() => {
-    fetchMemories();
+    async function loadMemories() {
+      await fetchMemories();
+    }
+    loadMemories();
   }, [search]);
 
   useEffect(() => {

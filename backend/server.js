@@ -2,7 +2,8 @@
 require("dotenv").config();
 const connectDB = require("./src/config/db");
 const app = require("./src/app");
-const schedulerService = require("./src/services/schedulerService"); // new
+const schedulerService = require("./src/services/schedulerService");
+const telemetryService = require("./src/services/telemetry.service");
 
 const PORT = process.env.PORT || 5000;
 
@@ -15,6 +16,13 @@ connectDB().then(async () => {
       console.log("🕒 Scheduler service started");
     } catch (err) {
       console.error("Scheduler failed to start:", err);
+    }
+
+    try {
+      await telemetryService.start();
+      console.log("📡 Telemetry service started");
+    } catch (err) {
+      console.error("Telemetry failed to start:", err);
     }
   });
 });

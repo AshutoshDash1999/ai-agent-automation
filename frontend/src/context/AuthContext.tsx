@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 type AuthUser = {
@@ -38,25 +38,56 @@ function isTokenExpired(jwt: string) {
 /* ---------------- Provider ---------------- */
 
 export default function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  /* ---- Initial boot ---- */
-  useEffect(() => {
+  const [token, setToken] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
     const saved = localStorage.getItem("token");
+    return saved && !isTokenExpired(saved) ? saved : null;
+  });
 
-    if (saved && !isTokenExpired(saved)) {
-      setToken(saved);
-      hydrateUser(saved);
-    } else {
-      localStorage.removeItem("token");
-      setToken(null);
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    if (typeof window === "undefined") return null;
+    const saved = localStorage.getItem("token");
+    if (!saved || isTokenExpired(saved)) return null;
+    const payload = decodeJwt(saved);
+    if (!payload) return null;
+    return {
+      id: payload.sub,
+      email: payload.email,
+      name: payload.name,
+    };
+  });
+
+  const [loading, setLoading] = useState(false);
+
+  const hydrateUser = useCallback((jwt: string) => {
+    const payload = decodeJwt(jwt);
+    if (!payload) {
       setUser(null);
+      return;
     }
 
-    setLoading(false);
+    setUser({
+      id: payload.sub,
+      email: payload.email,
+      name: payload.name,
+    });
+  }, []);
+
+  const logout = useCallback(() => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem("token");
+    router.replace("/login");
+  }, [router]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem("token");
+    if (saved && isTokenExpired(saved)) {
+      localStorage.removeItem("token");
+    }
   }, []);
 
   /* ---- Auto logout on token expiry (CRITICAL) ---- */
@@ -70,27 +101,14 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     const timeout = expiresAt - Date.now();
 
     if (timeout <= 0) {
-      logout();
+      setTimeout(logout, 0);
       return;
     }
 
-    const timer = setTimeout(() => {
-      logout();
-    }, timeout);
+    const timer = setTimeout(logout, timeout);
 
     return () => clearTimeout(timer);
-  }, [token]);
-
-  function hydrateUser(jwt: string) {
-    const payload = decodeJwt(jwt);
-    if (!payload) return setUser(null);
-
-    setUser({
-      id: payload.sub,
-      email: payload.email,
-      name: payload.name,
-    });
-  }
+  }, [token, logout]);
 
   function login(jwt: string) {
     if (isTokenExpired(jwt)) {
@@ -104,12 +122,6 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     router.replace("/");
   }
 
-  function logout() {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem("token");
-    router.replace("/login");
-  }
 
   return (
     <AuthContext.Provider value={{ token, user, login, logout, loading }}>

@@ -10,7 +10,7 @@ import ReactFlow, {
   Node,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiUrl } from "@/lib/api";
 import { v4 as uuidv4 } from "uuid";
 import { Edge, applyNodeChanges, applyEdgeChanges } from "reactflow";
@@ -61,6 +61,151 @@ function getNodeColor(type: string) {
   }
 }
 
+function buildNodePreview(step: any, edges: CustomEdge[], allSteps: any[]) {
+  const rows: { name: string; type: string }[] = [];
+
+  if (step.type === "LLM") {
+    rows.push({ name: "prompt", type: "string" });
+
+    if (step.useMemory) {
+      rows.push({ name: "memory", type: "agent" });
+      rows.push({ name: "memoryTopK", type: "number" });
+    }
+
+    rows.push({ name: "output", type: "text" });
+  }
+
+  if (step.type === "HTTP") {
+    rows.push({ name: "url", type: "string" });
+    rows.push({ name: "method", type: "string" });
+    rows.push({ name: "response", type: "json" });
+  }
+
+  if (step.type === "Delay") {
+    rows.push({ name: "seconds", type: "number" });
+  }
+
+  if (step.type === "Tool") {
+    rows.push({ name: "tool", type: "string" });
+  }
+
+  if (step.type === "Document") {
+    rows.push({ name: "query", type: "string" });
+    rows.push({ name: "topK", type: "number" });
+  }
+
+  if (step.type === "Condition") {
+    const trueEdge = (edges as CustomEdge[]).find(
+      (e) => e.source === step.id && e.condition === "true",
+    );
+
+    const falseEdge = (edges as CustomEdge[]).find(
+      (e) => e.source === step.id && e.condition === "false",
+    );
+
+    const trueStep = allSteps.find((s) => s.id === trueEdge?.target);
+    const falseStep = allSteps.find((s) => s.id === falseEdge?.target);
+
+    rows.push({ name: "true ->", type: trueStep?.name || "?" });
+    rows.push({ name: "false ->", type: falseStep?.name || "?" });
+  }
+
+  if (step.type === "Switch") {
+    const outgoing = (edges as CustomEdge[]).filter(
+      (e) => e.source === step.id,
+    );
+
+    outgoing.forEach((edge) => {
+      const e = edge as CustomEdge;
+
+      const targetStep = allSteps.find((s) => s.id === e.target);
+
+      rows.push({
+        name: e.caseValue || "case",
+        type: targetStep?.name || "?",
+      });
+    });
+  }
+
+  return rows;
+}
+
+function computeNodes(
+  steps: any[],
+  flowEdges: CustomEdge[],
+  onDeleteNode: (id: string) => void,
+): StepNode[] {
+  if (!steps?.length) return [];
+
+  return steps.map((step, index) => {
+    const schema = buildNodePreview(step, flowEdges, steps);
+
+    return {
+      id: step.id,
+      type: "default",
+      position: step.position || { x: index * 320, y: 120 },
+      data: {
+        label: (
+          <div className="w-full text-sm">
+            <div className="flex items-center justify-between border-b pb-1 mb-2 group">
+              <span className="font-semibold truncate flex items-center gap-2">
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: getNodeColor(step.type) }}
+                />
+                {step.name || "Untitled Step"}
+              </span>
+
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDeleteNode(step.id);
+                }}
+                className="text-red-500 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100 transition"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="text-xs text-muted-foreground mb-2">
+              {step.type}
+            </div>
+
+            <div className="space-y-1">
+              {schema.map((row) => (
+                <div
+                  key={row.name}
+                  className="flex justify-between gap-3 text-xs py-1 border-b border-muted/50 last:border-0"
+                >
+                  <span className="truncate">{row.name}</span>
+                  <span className="text-muted-foreground truncate">
+                    {row.type}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ),
+      },
+      style: {
+        padding: "12px 16px",
+        borderRadius: "12px",
+        border: `1px solid ${getNodeColor(step.type)}`,
+        background: "var(--card)",
+        color: "var(--foreground)",
+        fontSize: "14px",
+        cursor: "pointer",
+        fontWeight: 500,
+        minWidth: 240,
+        maxWidth: 240,
+        textAlign: "center" as const,
+        boxShadow: `0 0 0 1px ${getNodeColor(step.type)}20, 0 2px 6px rgba(0,0,0,0.05)`,
+      },
+    };
+  });
+}
+
 export default function VisualBuilder({
   steps,
   setSteps,
@@ -79,76 +224,28 @@ export default function VisualBuilder({
 
   useEffect(() => {
     onEdgesChange(flowEdges);
-  }, [flowEdges]);
+  }, [flowEdges, onEdgesChange]);
 
-  const computedNodes = useMemo(() => {
-    if (!steps || steps.length === 0) return [];
+  const deleteNode = useCallback(
+    (nodeId: string) => {
+      setFlowEdges((eds) =>
+        eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+      );
 
-    return steps.map((s, i) => {
-      const schema = buildNodePreview(s, flowEdges);
+      setSteps((prev) => prev.filter((s) => s.id !== nodeId));
 
-      return {
-        id: s.id,
-        type: "default",
-        position: s.position || { x: i * 320, y: 120 },
+      setSelectedNode((prev) => (prev?.id === nodeId ? null : prev));
+    },
+    [setSteps],
+  );
 
-        data: {
-          label: (
-            <div className="w-full text-sm">
-              <div className="flex items-center justify-between border-b pb-1 mb-2 group">
-                <span className="font-semibold truncate flex items-center gap-2">
-                  <span
-                    className="w-2 h-2 rounded-full"
-                    style={{ background: getNodeColor(s.type) }}
-                  />
-                  {s.name}
-                </span>
+  const [computedNodes, setComputedNodes] = useState(() =>
+    computeNodes(steps, flowEdges, deleteNode),
+  );
 
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteNode(s.id);
-                  }}
-                  className="text-red-500 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100 transition"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="text-xs text-muted-foreground mb-2">{s.type}</div>
-
-              <div className="space-y-1">
-                {schema.map((row) => (
-                  <div
-                    key={row.name}
-                    className="flex justify-between text-xs py-1 border-b border-muted/50 last:border-0"
-                  >
-                    <span>{row.name}</span>
-                    <span className="text-muted-foreground">{row.type}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ),
-        },
-
-        style: {
-          padding: "12px 16px",
-          borderRadius: "12px",
-          border: `1px solid ${getNodeColor(s.type)}`,
-          background: "var(--card)",
-          color: "var(--foreground)",
-          fontSize: "14px",
-          cursor: "pointer",
-          fontWeight: 500,
-          minWidth: 240,
-          maxWidth: 240,
-          textAlign: "center" as const,
-          boxShadow: `0 0 0 1px ${getNodeColor(s.type)}20, 0 2px 6px rgba(0,0,0,0.05)`,
-        },
-      };
-    });
-  }, [steps, flowEdges]); // ✅ NOT flowEdges
+  useEffect(() => {
+    setComputedNodes(computeNodes(steps, flowEdges, deleteNode));
+  }, [steps, flowEdges, deleteNode]);
 
   const [nodes, setNodes, _onNodesChange] = useNodesState(computedNodes);
 
@@ -159,7 +256,7 @@ export default function VisualBuilder({
         return old ? { ...old, ...newNode } : newNode;
       }),
     );
-  }, [computedNodes]);
+  }, [computedNodes, setNodes]);
 
   /* ---------- EVENTS ---------- */
 
@@ -308,80 +405,13 @@ export default function VisualBuilder({
     );
   }
 
-  function buildNodePreview(step: any, edges: CustomEdge[]) {
-    const rows: { name: string; type: string }[] = [];
-
-    if (step.type === "LLM") {
-      rows.push({ name: "prompt", type: "string" });
-
-      if (step.useMemory) {
-        rows.push({ name: "memory", type: "agent" });
-        rows.push({ name: "memoryTopK", type: "number" });
-      }
-
-      rows.push({ name: "output", type: "text" });
-    }
-
-    if (step.type === "HTTP") {
-      rows.push({ name: "url", type: "string" });
-      rows.push({ name: "method", type: "string" });
-      rows.push({ name: "response", type: "json" });
-    }
-
-    if (step.type === "Delay") {
-      rows.push({ name: "seconds", type: "number" });
-    }
-
-    if (step.type === "Tool") {
-      rows.push({ name: "tool", type: "string" });
-    }
-
-    if (step.type === "Document") {
-      rows.push({ name: "query", type: "string" });
-      rows.push({ name: "topK", type: "number" });
-    }
-
-    if (step.type === "Condition") {
-      const trueEdge = (edges as CustomEdge[]).find(
-        (e) => e.source === step.id && e.condition === "true",
-      );
-
-      const falseEdge = (edges as CustomEdge[]).find(
-        (e) => e.source === step.id && e.condition === "false",
-      );
-
-      const trueStep = steps.find((s) => s.id === trueEdge?.target);
-      const falseStep = steps.find((s) => s.id === falseEdge?.target);
-
-      rows.push({ name: "true →", type: trueStep?.name || "?" });
-      rows.push({ name: "false →", type: falseStep?.name || "?" });
-    }
-
-    if (step.type === "Switch") {
-      const outgoing = (edges as CustomEdge[]).filter(
-        (e) => e.source === step.id,
-      );
-
-      outgoing.forEach((edge) => {
-        const e = edge as CustomEdge;
-
-        const targetStep = steps.find((s) => s.id === e.target);
-
-        rows.push({
-          name: e.caseValue || "case",
-          type: targetStep?.name || "?",
-        });
-      });
-    }
-
-    return rows;
-  }
+  
 
   function updateNodeLabel(stepId: string, name: string, type: string) {
     const step = steps.find((s) => s.id === stepId);
     if (!step) return;
 
-    const schema = buildNodePreview({ ...step, name, type }, flowEdges);
+    const schema = buildNodePreview({ ...step, name, type }, flowEdges, steps);
 
     setNodes((nds) =>
       nds.map((n) =>
@@ -550,23 +580,6 @@ export default function VisualBuilder({
         prompt: "",
       },
     ]);
-  }
-
-  /* ---------- DELETE NODE ---------- */
-
-  function deleteNode(nodeId: string) {
-    setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-
-    // 🔥 remove all edges connected to this node
-    setFlowEdges((eds) =>
-      eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
-    );
-
-    setSteps((prev) => prev.filter((s) => s.id !== nodeId));
-
-    if (selectedNode?.id === nodeId) {
-      setSelectedNode(null);
-    }
   }
 
   return (

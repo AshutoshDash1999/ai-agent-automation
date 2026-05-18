@@ -5,6 +5,7 @@ const Workflow = require("../models/workflow.model");
 const SystemSettings = require("../models/systemSettings.model");
 const { claimNextTask, completeTask } = require("./queueService");
 const { executeStep } = require("./executor");
+const telemetryService = require("../services/telemetry.service");
 const WORKER_ID = process.env.WORKER_ID || "agent-1";
 require("dotenv").config();
 
@@ -278,6 +279,17 @@ async function runWorkerLoop() {
       // Complete task
       // -------------------------
       await completeTask(task._id, { success });
+
+      const durationMs = task.startedAt
+        ? Date.now() - new Date(task.startedAt).getTime()
+        : 0;
+
+      const stepTypes = context.results.map((result) => result.type || "unknown");
+      telemetryService
+        .recordTaskMetrics({ stepTypes, durationMs })
+        .catch((err) => {
+          console.error("Telemetry recordTaskMetrics failed:", err.message || err);
+        });
 
       console.log(`✅ Task ${task._id} completed. Success: ${success}`);
       writeLog(

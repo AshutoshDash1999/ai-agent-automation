@@ -56,6 +56,24 @@ type DocumentChatSettings = {
   temperature: number;
 };
 
+type TelemetryMetrics = {
+  taskRuns: number;
+  workflowExecutions: number;
+  totalStepExecutions: number;
+  totalTaskDurationMs: number;
+  stepTypeCounts: Record<string, number>;
+};
+
+type TelemetryState = {
+  enabled: boolean;
+  instanceId: string;
+  lastHeartbeatAt: string | null;
+  lastHeartbeatVersion: string | null;
+  endpointConfigured: boolean;
+  outboundDisabled: boolean;
+  localMetrics: TelemetryMetrics;
+};
+
 type SystemSettings = {
   worker: WorkerSettings;
   ui: {
@@ -71,6 +89,22 @@ const PROVIDER_LABELS: Record<AssistantProvider, string> = {
   openai: "OpenAI",
   gemini: "Gemini",
   huggingface: "Hugging Face",
+};
+
+const DEFAULT_TELEMETRY: TelemetryState = {
+  enabled: false,
+  instanceId: "",
+  lastHeartbeatAt: null,
+  lastHeartbeatVersion: null,
+  endpointConfigured: false,
+  outboundDisabled: false,
+  localMetrics: {
+    taskRuns: 0,
+    workflowExecutions: 0,
+    totalStepExecutions: 0,
+    totalTaskDurationMs: 0,
+    stepTypeCounts: {},
+  },
 };
 
 const DEFAULT_SETTINGS: SystemSettings = {
@@ -145,6 +179,8 @@ export default function SettingsPage() {
     huggingface?: boolean;
   }>({});
 
+  const [telemetry, setTelemetry] = useState<TelemetryState>(DEFAULT_TELEMETRY);
+
   /* -------------------------
      Env status
   ------------------------- */
@@ -209,6 +245,53 @@ export default function SettingsPage() {
 
     const data = await res.json();
     if (data.ok) setEnv(data.env);
+  }
+
+  async function loadTelemetry() {
+    try {
+      const res = await fetch(apiUrl("/telemetry"), {
+        headers: {
+          Authorization: "Bearer " + localStorage.getItem("token"),
+        },
+      });
+      const data = await res.json();
+      if (data.ok && data.telemetry) {
+        setTelemetry(data.telemetry);
+      }
+    } catch (err) {
+      console.error("Failed to load telemetry", err);
+    }
+  }
+
+  async function saveTelemetryEnabled(enabled: boolean) {
+    try {
+      const res = await fetch(apiUrl("/telemetry"), {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + localStorage.getItem("token"),
+        },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (data.ok && data.telemetry) {
+        setTelemetry(data.telemetry);
+        addToast({
+          type: "success",
+          title: "Telemetry Updated",
+          description: `Anonymous telemetry has been ${
+            enabled ? "enabled" : "disabled"
+          }.`,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to save telemetry", err);
+      addToast({
+        type: "error",
+        title: "Telemetry Save Failed",
+        description: "Could not update telemetry preferences.",
+      });
+    }
   }
 
   useEffect(() => {
@@ -277,6 +360,7 @@ export default function SettingsPage() {
   useEffect(() => {
     loadSettings();
     loadEnv();
+    loadTelemetry();
   }, []);
 
   if (loading) return <p className="p-8">Loading…</p>;
@@ -300,49 +384,52 @@ export default function SettingsPage() {
                 Manage your system preferences
               </p>
 
-              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 items-start">
                 {/* Worker */}
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <Card className="p-4 space-y-4">
-                    <h2 className="text-lg font-semibold">Worker</h2>
+                  <Card className="p-6 flex flex-col">
+                    <div className="space-y-4 flex-1">
+                      <h2 className="text-lg font-semibold">Worker</h2>
 
-                    <div>
-                      <Label>Poll Interval (ms)</Label>
-                      <Input
-                        type="number"
-                        value={settings.worker.pollIntervalMs}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            worker: {
-                              ...settings.worker,
-                              pollIntervalMs: Number(e.target.value),
-                            },
-                          })
-                        }
-                      />
-                    </div>
+                      <div>
+                        <Label>Poll Interval (ms)</Label>
+                        <Input
+                          type="number"
+                          value={settings.worker.pollIntervalMs}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              worker: {
+                                ...settings.worker,
+                                pollIntervalMs: Number(e.target.value),
+                              },
+                            })
+                          }
+                        />
+                      </div>
 
-                    <div>
-                      <Label>Max Attempts</Label>
-                      <Input
-                        type="number"
-                        value={settings.worker.maxAttempts}
-                        onChange={(e) =>
-                          setSettings({
-                            ...settings,
-                            worker: {
-                              ...settings.worker,
-                              maxAttempts: Number(e.target.value),
-                            },
-                          })
-                        }
-                      />
+                      <div>
+                        <Label>Max Attempts</Label>
+                        <Input
+                          type="number"
+                          value={settings.worker.maxAttempts}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              worker: {
+                                ...settings.worker,
+                                maxAttempts: Number(e.target.value),
+                              },
+                            })
+                          }
+                        />
+                      </div>
                     </div>
 
                     <Button
                       onClick={saveWorkerSettings}
                       disabled={savingWorker}
+                      className="w-full md:w-auto"
                     >
                       {savingWorker ? "Saving…" : "Save"}
                     </Button>
@@ -351,7 +438,7 @@ export default function SettingsPage() {
 
                 {/* Environment */}
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <Card className="p-6 space-y-2">
+                  <Card className="p-6 space-y-4">
                     <h2 className="text-lg font-semibold">Environment</h2>
                     <p className="text-sm text-muted-foreground">
                       Secrets are managed via environment variables.
@@ -475,20 +562,17 @@ export default function SettingsPage() {
 
                               setSettings(updated);
 
-                              await fetch(
-                                apiUrl("/settings"),
-                                {
-                                  method: "PUT",
-                                  headers: {
-                                    "Content-Type": "application/json",
-                                    Authorization:
-                                      "Bearer " + localStorage.getItem("token"),
-                                  },
-                                  body: JSON.stringify({
-                                    assistant: updated.assistant,
-                                  }),
+                              await fetch(apiUrl("/settings"), {
+                                method: "PUT",
+                                headers: {
+                                  "Content-Type": "application/json",
+                                  Authorization:
+                                    "Bearer " + localStorage.getItem("token"),
                                 },
-                              );
+                                body: JSON.stringify({
+                                  assistant: updated.assistant,
+                                }),
+                              });
                             }}
                           >
                             {Object.entries(availableProviders).map(
@@ -627,20 +711,17 @@ export default function SettingsPage() {
 
                               setSettings(updated);
 
-                              await fetch(
-                                apiUrl("/settings"),
-                                {
-                                  method: "PUT",
-                                  headers: {
-                                    "Content-Type": "application/json",
-                                    Authorization:
-                                      "Bearer " + localStorage.getItem("token"),
-                                  },
-                                  body: JSON.stringify({
-                                    documentChat: updated.documentChat,
-                                  }),
+                              await fetch(apiUrl("/settings"), {
+                                method: "PUT",
+                                headers: {
+                                  "Content-Type": "application/json",
+                                  Authorization:
+                                    "Bearer " + localStorage.getItem("token"),
                                 },
-                              );
+                                body: JSON.stringify({
+                                  documentChat: updated.documentChat,
+                                }),
+                              });
                             }}
                           >
                             {Object.entries(availableProviders).map(
@@ -753,6 +834,87 @@ export default function SettingsPage() {
                           });
                         }}
                       />
+                    </div>
+                  </Card>
+                </motion.div>
+
+                {/* Telemetry */}
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                  <Card className="p-6 space-y-4">
+                    <h2 className="text-lg font-semibold">Telemetry</h2>
+
+                    <p className="text-sm text-muted-foreground">
+                      Optional anonymous telemetry is local-first and opt-in. No
+                      prompts, documents, or user data are collected.
+                    </p>
+
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">
+                          Enable anonymous telemetry
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Use a random instance ID and minimal system metadata.
+                        </div>
+                      </div>
+                      <Switch
+                        checked={telemetry.enabled}
+                        onCheckedChange={saveTelemetryEnabled}
+                      />
+                    </div>
+
+                    <div className="space-y-2 text-sm">
+                      <div>
+                        Instance ID:{" "}
+                        <span className="font-mono">
+                          {telemetry.instanceId || "not generated yet"}
+                        </span>
+                      </div>
+                      <div>
+                        Heartbeat:{" "}
+                        {telemetry.lastHeartbeatAt
+                          ? new Date(telemetry.lastHeartbeatAt).toLocaleString()
+                          : "not sent yet"}
+                      </div>
+                      <div>
+                        Endpoint configured:{" "}
+                        {telemetry.endpointConfigured ? "Yes" : "No"}
+                      </div>
+                      <div>
+                        <div>
+                          Workflow executions:{" "}
+                          {telemetry.localMetrics.workflowExecutions}
+                        </div>
+                        <div>
+                          Average task duration:{" "}
+                          {telemetry.localMetrics.taskRuns > 0
+                            ? Math.round(
+                                telemetry.localMetrics.totalTaskDurationMs /
+                                  telemetry.localMetrics.taskRuns,
+                              )
+                            : 0}{" "}
+                          ms
+                        </div>
+                        <div>
+                          Step executions:{" "}
+                          {telemetry.localMetrics.totalStepExecutions}
+                        </div>
+                        {Object.entries(telemetry.localMetrics.stepTypeCounts)
+                          .length > 0 && (
+                          <div>
+                            Step type usage:
+                            <ul className="ml-4 list-disc">
+                              {Object.entries(
+                                telemetry.localMetrics.stepTypeCounts,
+                              ).map(([type, count]) => (
+                                <li key={type}>
+                                  {type}: {count}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </Card>
                 </motion.div>

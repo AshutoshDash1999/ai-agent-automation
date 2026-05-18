@@ -103,7 +103,20 @@ type WorkflowStep = {
 type BackendStep = {
   name: string;
   stepId: string;
-  type: "LLM" | "HTTP" | "Delay" | "Tool";
+  type:
+    | "LLM"
+    | "HTTP"
+    | "Delay"
+    | "Tool"
+    | "llm"
+    | "http"
+    | "delay"
+    | "condition"
+    | "switch"
+    | "document_query"
+    | "file"
+    | "email"
+    | "browser";
 
   prompt?: string;
 
