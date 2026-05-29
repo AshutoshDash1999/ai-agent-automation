@@ -25,7 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Plus, MoreVertical, Bot, ChevronDown } from "lucide-react";
+import { Plus, MoreVertical, Bot, ChevronDown, Copy, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiUrl } from "@/lib/api";
 
@@ -73,6 +73,7 @@ export default function WorkflowsPage() {
   const [agentMap, setAgentMap] = useState<Record<string, string>>({});
   const { addToast } = useToast();
   const { setContext, clearContext } = useAssistantContext();
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   async function fetchAgents() {
     const res = await fetch(apiUrl("/agents"), {
@@ -174,6 +175,12 @@ export default function WorkflowsPage() {
       clearContext();
     };
   }, [loading, workflows]);
+
+  function copyId(id: string) {
+    navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  }
 
   function getAgentName(agentId?: string | null) {
     if (!agentId) return "No agent";
@@ -287,6 +294,33 @@ export default function WorkflowsPage() {
                         <Bot className="size-4" />
                         <span>{getAgentName(workflow.agentId)}</span>
                       </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between border-t pt-3">
+                      <span className="text-xs text-muted-foreground font-mono truncate max-w-[160px]">
+                        {workflow._id.slice(0, 8)}...
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1.5 text-xs"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          copyId(workflow._id);
+                        }}
+                      >
+                        {copiedId === workflow._id ? (
+                          <>
+                            <Check className="size-3 text-green-500" />
+                            <span className="text-green-500">Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="size-3" />
+                            Copy ID
+                          </>
+                        )}
+                      </Button>
                     </div>
                   </Card>
                 ))}
