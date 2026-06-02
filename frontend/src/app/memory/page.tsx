@@ -81,6 +81,7 @@ export default function MemoryPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchMemories();
   }, [search]);
 
@@ -182,7 +183,7 @@ export default function MemoryPage() {
                               </EmptyMedia>
                               <EmptyTitle>No memories found</EmptyTitle>
                               <EmptyDescription>
-                                Your filter parameter for "{search}" returned no historical semantic matches.
+                                Your filter parameter for &quot;{search}&quot; returned no historical semantic matches.
                               </EmptyDescription>
                             </EmptyHeader>
                             <EmptyContent>
