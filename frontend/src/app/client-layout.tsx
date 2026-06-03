@@ -20,6 +20,11 @@ function InnerLayout({ children }: { children: React.ReactNode }) {
   const { setTheme } = useTheme();
   const pathname = usePathname();
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const isPublicRoute = PUBLIC_ROUTES.includes(pathname);
 
@@ -39,7 +44,7 @@ function InnerLayout({ children }: { children: React.ReactNode }) {
         </AuthGuard>
       )}
 
-      {!isPublicRoute && (
+      {mounted &&!isPublicRoute && (
         <>
           <AssistantShell
             open={assistantOpen}
@@ -57,7 +62,7 @@ function InnerLayout({ children }: { children: React.ReactNode }) {
         </>
       )}
 
-      <Toaster />
+      {mounted && <Toaster />}
       <Analytics />
     </>
   );

@@ -1,5 +1,4 @@
 "use client";
-
 import { createContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
@@ -20,7 +19,6 @@ type AuthContextType = {
 export const AuthContext = createContext<AuthContextType | null>(null);
 
 /* ---------------- Helpers ---------------- */
-
 function decodeJwt(jwt: string) {
   try {
     return JSON.parse(atob(jwt.split(".")[1]));
@@ -36,30 +34,15 @@ function isTokenExpired(jwt: string) {
 }
 
 /* ---------------- Provider ---------------- */
-
 export default function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
-  const [token, setToken] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    const saved = localStorage.getItem("token");
-    return saved && !isTokenExpired(saved) ? saved : null;
-  });
-
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    if (typeof window === "undefined") return null;
-    const saved = localStorage.getItem("token");
-    if (!saved || isTokenExpired(saved)) return null;
-    const payload = decodeJwt(saved);
-    if (!payload) return null;
-    return {
-      id: payload.sub,
-      email: payload.email,
-      name: payload.name,
-    };
-  });
-
-  const [loading, setLoading] = useState(false);
+  // FIX: Always start with null/null/true on BOTH server and client.
+  // Previously, useState lazy initializers were reading localStorage which
+  // only exists on the client — causing server/client mismatch.
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true); // true = still hydrating from localStorage
 
   const hydrateUser = useCallback((jwt: string) => {
     const payload = decodeJwt(jwt);
@@ -67,7 +50,6 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       return;
     }
-
     setUser({
       id: payload.sub,
       email: payload.email,
@@ -82,18 +64,23 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     router.replace("/login");
   }, [router]);
 
+  // FIX: Hydrate from localStorage only on client after mount.
+  // This runs once on mount — server never runs this.
   useEffect(() => {
-    if (typeof window === "undefined") return;
     const saved = localStorage.getItem("token");
-    if (saved && isTokenExpired(saved)) {
+    if (saved && !isTokenExpired(saved)) {
+      setToken(saved);
+      hydrateUser(saved);
+    } else if (saved) {
+      // Token exists but expired — clean it up
       localStorage.removeItem("token");
     }
+    setLoading(false); // hydration done
   }, []);
 
-  /* ---- Auto logout on token expiry (CRITICAL) ---- */
+  // Auto logout when token expires
   useEffect(() => {
     if (!token) return;
-
     const payload = decodeJwt(token);
     if (!payload?.exp) return;
 
@@ -106,7 +93,6 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const timer = setTimeout(logout, timeout);
-
     return () => clearTimeout(timer);
   }, [token, logout]);
 
@@ -115,13 +101,11 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       logout();
       return;
     }
-
     setToken(jwt);
     localStorage.setItem("token", jwt);
     hydrateUser(jwt);
     router.replace("/");
   }
-
 
   return (
     <AuthContext.Provider value={{ token, user, login, logout, loading }}>
