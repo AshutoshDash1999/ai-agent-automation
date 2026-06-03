@@ -104,6 +104,12 @@ const envSchema = z.object({
     .int()
     .positive("RATE_LIMIT_EXPENSIVE_MAX must be a positive number")
     .optional(),
+
+  RATE_LIMIT_WEBHOOK_MAX: z.coerce
+    .number()
+    .int()
+    .positive("RATE_LIMIT_WEBHOOK_MAX must be a positive number")
+    .optional(),
 });
 
 function validateEnv() {

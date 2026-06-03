@@ -1,7 +1,18 @@
 const rateLimit = require("express-rate-limit");
+const { writeLog } = require("../agents/logger");
 
-// Standard rate limit exceeded JSON handler
+// Standard rate limit exceeded JSON handler with database logging
 const limitHandler = (req, res, next, options) => {
+  const ip = req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  const logMessage = `Rate limit violation: IP ${ip} blocked requesting ${req.method} ${req.originalUrl}`;
+  
+  // Log locally to stdout/stderr
+  console.warn(`⚠️ [RateLimiter] ${logMessage}`);
+  
+  // Persist rate limit violation to system logs
+  writeLog(logMessage, "warn", { workerId: "rate-limiter" })
+    .catch((err) => console.error("Failed to write rate limit log to DB:", err.message));
+
   res.status(options.statusCode).json({
     error: "rate_limit_exceeded",
     message: options.message,
@@ -38,8 +49,19 @@ const expensiveLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// 4. Webhook Limiter (applied to public /webhook routes)
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute window
+  max: Number(process.env.RATE_LIMIT_WEBHOOK_MAX) || 20,
+  message: "Too many webhook requests. Please slow down.",
+  handler: limitHandler,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 module.exports = {
   globalLimiter,
   authLimiter,
   expensiveLimiter,
+  webhookLimiter,
 };
