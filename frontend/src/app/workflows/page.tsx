@@ -1,21 +1,18 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
-import Link from "next/link";
 import { AppSidebar } from "@/components/app-sidebar";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { AuthGuard } from "@/components/auth/auth-guard";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useAssistantContext } from "@/context/assistant-context";
+import { Card } from "@/components/ui/card";
 import {
-  Empty,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-  EmptyDescription,
-  EmptyContent,
-} from "@/components/ui/empty";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,19 +20,30 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Plus, MoreVertical, Bot, ChevronDown, Copy, Check, GitFork } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { useAssistantContext } from "@/context/assistant-context";
 import { useToast } from "@/hooks/use-toast";
 import { apiUrl } from "@/lib/api";
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  Copy,
+  GitFork,
+  MoreVertical,
+  Plus,
+} from "lucide-react";
+import Link from "next/link";
+import { FormEvent, memo, useCallback, useEffect, useState } from "react";
 
 type Agent = {
   _id: string;
@@ -72,6 +80,119 @@ function getStatusColor(status: string) {
   }
 }
 
+/* ---------------- Memoized Workflow Card ---------------- */
+// Extracted to prevent entire list from re-rendering when one card updates
+const WorkflowCard = memo(
+  ({
+    workflow,
+    agentName,
+    isCopied,
+    onCopy,
+    onEdit,
+    onDelete,
+  }: {
+    workflow: Workflow;
+    agentName: string;
+    isCopied: boolean;
+    onCopy: (id: string) => void;
+    onEdit: (workflow: Workflow) => void;
+    onDelete: (id: string) => void;
+  }) => {
+    return (
+      <Card className="p-6">
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <Link
+              href={`/workflows/${workflow._id}`}
+              className="text-lg font-semibold hover:text-primary"
+            >
+              {workflow.name}
+            </Link>
+
+            {workflow.description && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                {workflow.description}
+              </p>
+            )}
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+
+            <DropdownMenuContent align="end">
+              <Link href={`/workflows/${workflow._id}/builder`}>
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onEdit(workflow);
+                  }}
+                >
+                  Edit Workflow Details
+                </DropdownMenuItem>
+              </Link>
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDelete(workflow._id);
+                }}
+              >
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="mt-4 flex items-center justify-between">
+          <Badge className={getStatusColor(workflow.status)}>
+            {workflow.status}
+          </Badge>
+
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Bot className="size-4" />
+            <span>{agentName}</span>
+          </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between border-t pt-3">
+          <span className="text-xs text-muted-foreground font-mono truncate max-w-[160px]">
+            {workflow._id.slice(0, 8)}...
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={(e) => {
+              e.preventDefault();
+              onCopy(workflow._id);
+            }}
+          >
+            {isCopied ? (
+              <>
+                <Check className="size-3 text-green-500" />
+                <span className="text-green-500">Copied!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="size-3" />
+                Copy ID
+              </>
+            )}
+          </Button>
+        </div>
+      </Card>
+    );
+  },
+);
+
+WorkflowCard.displayName = "WorkflowCard";
+
 export default function WorkflowsPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,7 +204,7 @@ export default function WorkflowsPage() {
   const { setContext, clearContext } = useAssistantContext();
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  async function fetchAgents() {
+  const fetchAgents = useCallback(async () => {
     const res = await fetch(apiUrl("/agents"), {
       headers: {
         Authorization: "Bearer " + localStorage.getItem("token"),
@@ -102,9 +223,9 @@ export default function WorkflowsPage() {
 
       setAgentMap(map);
     }
-  }
+  }, []);
 
-  async function fetchWorkflows() {
+  const fetchWorkflows = useCallback(async () => {
     try {
       const res = await fetch(apiUrl("/workflows"), {
         headers: {
@@ -119,49 +240,60 @@ export default function WorkflowsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  async function handleDeleteWorkflow(id: string) {
-    const confirmed = confirm("Delete this workflow? This cannot be undone.");
-    if (!confirmed) return;
+  const handleDeleteWorkflow = useCallback(
+    async (id: string) => {
+      const confirmed = confirm("Delete this workflow? This cannot be undone.");
+      if (!confirmed) return;
 
-    try {
-      const res = await fetch(apiUrl(`/workflows/${id}`), {
-        method: "DELETE",
-        headers: {
-          Authorization: "Bearer " + (localStorage.getItem("token") ?? ""),
-        },
-      });
-
-      if (!res.ok) {
-        addToast({
-          type: "error",
-          title: "Failed to delete workflow",
-          description:
-            "There was an error deleting the workflow. Please try again.",
+      try {
+        const res = await fetch(apiUrl(`/workflows/${id}`), {
+          method: "DELETE",
+          headers: {
+            Authorization: "Bearer " + (localStorage.getItem("token") ?? ""),
+          },
         });
-        return;
+
+        if (!res.ok) {
+          addToast({
+            type: "error",
+            title: "Failed to delete workflow",
+            description:
+              "There was an error deleting the workflow. Please try again.",
+          });
+          return;
+        }
+
+        addToast({
+          type: "success",
+          title: "Workflow deleted",
+          description: "Your workflow was deleted successfully.",
+        });
+
+        fetchWorkflows();
+      } catch (err) {
+        console.error("Delete failed:", err);
       }
-
-      addToast({
-        type: "success",
-        title: "Workflow deleted",
-        description: "Your workflow was deleted successfully.",
-      });
-
-      fetchWorkflows();
-    } catch (err) {
-      console.error("Delete failed:", err);
-    }
-  }
+    },
+    [addToast, fetchWorkflows],
+  );
 
   useEffect(() => {
     fetchWorkflows();
-  }, []);
+  }, [fetchWorkflows]);
 
   useEffect(() => {
     fetchAgents();
-  }, []);
+  }, [fetchAgents]);
+
+  const getAgentName = useCallback(
+    (agentId?: string | null) => {
+      if (!agentId) return "No agent";
+      return agentMap[agentId] ?? "Unknown agent";
+    },
+    [agentMap],
+  );
 
   useEffect(() => {
     if (loading) return;
@@ -181,26 +313,29 @@ export default function WorkflowsPage() {
     return () => {
       clearContext();
     };
-  }, [loading, workflows]);
+    // Properly resolving exhaustive-deps by adding stable context setters and callbacks
+  }, [loading, workflows, setContext, clearContext, getAgentName]);
 
-async function copyId(id: string) {
-    try {
-      await navigator.clipboard.writeText(id);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      addToast({
-        type: "error",
-        title: "Failed to copy",
-        description: "Could not copy workflow ID to clipboard.",
-      });
-    }
-  }
+  const copyId = useCallback(
+    async (id: string) => {
+      try {
+        await navigator.clipboard.writeText(id);
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 2000);
+      } catch {
+        addToast({
+          type: "error",
+          title: "Failed to copy",
+          description: "Could not copy workflow ID to clipboard.",
+        });
+      }
+    },
+    [addToast],
+  );
 
-  function getAgentName(agentId?: string | null) {
-    if (!agentId) return "No agent";
-    return agentMap[agentId] ?? "Unknown agent";
-  }
+  const handleEditWorkflow = useCallback((workflow: Workflow) => {
+    setEditingWorkflow(workflow);
+  }, []);
 
   return (
     <AuthGuard>
@@ -252,7 +387,8 @@ async function copyId(id: string) {
                     </EmptyMedia>
                     <EmptyTitle>No workflows yet</EmptyTitle>
                     <EmptyDescription>
-                      Create your first automated workflow or build from a template configuration to begin setting up agent jobs.
+                      Create your first automated workflow or build from a
+                      template configuration to begin setting up agent jobs.
                     </EmptyDescription>
                   </EmptyHeader>
                   <EmptyContent>
@@ -260,7 +396,10 @@ async function copyId(id: string) {
                       <Button onClick={() => setOpen("blank")}>
                         Create Blank Workflow
                       </Button>
-                      <Button variant="outline" onClick={() => setOpen("template")}>
+                      <Button
+                        variant="outline"
+                        onClick={() => setOpen("template")}
+                      >
                         Choose Template
                       </Button>
                     </div>
@@ -270,98 +409,15 @@ async function copyId(id: string) {
             ) : (
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
                 {workflows.map((workflow) => (
-                  <Card key={workflow._id} className="p-6">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <Link
-                          href={`/workflows/${workflow._id}`}
-                          className="text-lg font-semibold hover:text-primary"
-                        >
-                          {workflow.name}
-                        </Link>
-
-                        {workflow.description && (
-                          <p className="mt-2 text-sm text-muted-foreground">
-                            {workflow.description}
-                          </p>
-                        )}
-                      </div>
-
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                          >
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-
-                        <DropdownMenuContent align="end">
-                          <Link href={`/workflows/${workflow._id}/builder`}>
-                            <DropdownMenuItem
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setEditingWorkflow(workflow);
-                              }}
-                            >
-                              Edit Workflow Details
-                            </DropdownMenuItem>
-                          </Link>
-                          <DropdownMenuItem
-                            className="text-destructive"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleDeleteWorkflow(workflow._id);
-                            }}
-                          >
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between">
-                      <Badge className={getStatusColor(workflow.status)}>
-                        {workflow.status}
-                      </Badge>
-
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Bot className="size-4" />
-                        <span>{getAgentName(workflow.agentId)}</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between border-t pt-3">
-                      <span className="text-xs text-muted-foreground font-mono truncate max-w-[160px]">
-                        {workflow._id.slice(0, 8)}...
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1.5 text-xs"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          copyId(workflow._id);
-                        }}
-                      >
-                        {copiedId === workflow._id ? (
-                          <>
-                            <Check className="size-3 text-green-500" />
-                            <span className="text-green-500">Copied!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="size-3" />
-                            Copy ID
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </Card>
+                  <WorkflowCard
+                    key={workflow._id}
+                    workflow={workflow}
+                    agentName={getAgentName(workflow.agentId)}
+                    isCopied={copiedId === workflow._id}
+                    onCopy={copyId}
+                    onEdit={handleEditWorkflow}
+                    onDelete={handleDeleteWorkflow}
+                  />
                 ))}
               </div>
             )}
@@ -477,7 +533,9 @@ function CreateWorkflowModal({
               <Button variant="outline" type="button" onClick={onOpenChange}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={loading}>Create Workflow</Button>
+              <Button type="submit" disabled={loading}>
+                Create Workflow
+              </Button>
             </DialogFooter>
           </form>
         )}
@@ -591,19 +649,16 @@ function TemplateSelector({
   const [templates, setTemplates] = useState<any[]>([]);
   const { addToast } = useToast();
 
-  async function fetchTemplates() {
-    const res = await fetch(apiUrl("/templates"), {
-      headers: {
-        Authorization: "Bearer " + localStorage.getItem("token"),
-      },
-    });
-
-    const data = await res.json();
-    if (data.ok) setTemplates(data.templates);
-  }
-
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    async function fetchTemplates() {
+      const res = await fetch(apiUrl("/templates"), {
+        headers: {
+          Authorization: "Bearer " + localStorage.getItem("token"),
+        },
+      });
+      const data = await res.json();
+      if (data.ok) setTemplates(data.templates);
+    }
     fetchTemplates();
   }, []);
 
