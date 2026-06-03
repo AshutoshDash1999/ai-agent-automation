@@ -79,6 +79,37 @@ const envSchema = z.object({
   DISABLE_ALL_ANALYTICS: z.coerce.boolean().optional(),
 
   TELEMETRY_ENDPOINT: z.string().optional(),
+
+  // rate limiting
+  RATE_LIMIT_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive("RATE_LIMIT_WINDOW_MS must be a positive number")
+    .optional(),
+
+  RATE_LIMIT_GLOBAL_MAX: z.coerce
+    .number()
+    .int()
+    .positive("RATE_LIMIT_GLOBAL_MAX must be a positive number")
+    .optional(),
+
+  RATE_LIMIT_AUTH_MAX: z.coerce
+    .number()
+    .int()
+    .positive("RATE_LIMIT_AUTH_MAX must be a positive number")
+    .optional(),
+
+  RATE_LIMIT_EXPENSIVE_MAX: z.coerce
+    .number()
+    .int()
+    .positive("RATE_LIMIT_EXPENSIVE_MAX must be a positive number")
+    .optional(),
+
+  RATE_LIMIT_WEBHOOK_MAX: z.coerce
+    .number()
+    .int()
+    .positive("RATE_LIMIT_WEBHOOK_MAX must be a positive number")
+    .optional(),
 });
 
 function validateEnv() {
