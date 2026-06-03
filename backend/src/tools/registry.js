@@ -17,10 +17,43 @@ function runToolInSandbox(toolName, functionName, args = []) {
     const gid = process.env.TOOL_SANDBOX_GID ? Number(process.env.TOOL_SANDBOX_GID) : undefined;
     const timeoutMs = process.env.TOOL_EXECUTION_TIMEOUT_MS ? Number(process.env.TOOL_EXECUTION_TIMEOUT_MS) : 30000;
 
+    const allowedEnv = {
+      IS_SANDBOX: "true"
+    };
+
+    // System-critical environment variables required for binary execution (e.g. Chrome/Puppeteer)
+    const SYSTEM_ENV_VARS = ["PATH", "HOME", "USER", "NODE_ENV", "PWD"];
+    for (const key of SYSTEM_ENV_VARS) {
+      if (process.env[key] !== undefined) {
+        allowedEnv[key] = process.env[key];
+      }
+    }
+
+    // Explicitly allowed variables for non-sensitive tool configurations
+    const TOOL_CONFIG_VARS = [
+      "FILE_BASE_DIR",
+      "PUPPETEER_HEADLESS",
+      "MAIL_HOST",
+      "MAIL_PORT",
+      "MAIL_USER",
+      "MAIL_PASS",
+      "MAIL_FROM",
+      "EMAIL_HOST",
+      "EMAIL_PORT",
+      "EMAIL_USER",
+      "EMAIL_PASS",
+      "EMAIL_FROM"
+    ];
+    for (const key of TOOL_CONFIG_VARS) {
+      if (process.env[key] !== undefined) {
+        allowedEnv[key] = process.env[key];
+      }
+    }
+
     const forkOpts = {
       stdio: ["inherit", "inherit", "inherit", "ipc"], // inherit standard output/error, enable IPC
       execArgv: ["--max-old-space-size=256"], // limit process memory allocation
-      env: { ...process.env, IS_SANDBOX: "true" }
+      env: allowedEnv
     };
 
     if (uid !== undefined && !isNaN(uid)) {

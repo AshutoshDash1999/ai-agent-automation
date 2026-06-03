@@ -12,7 +12,7 @@ const unlink = util.promisify(fs.unlink);
 const readdir = util.promisify(fs.readdir);
 const stat = util.promisify(fs.stat);
 
-const BASE_DIR = path.resolve(process.env.FILE_BASE_DIR || process.cwd());
+const BASE_DIR = path.resolve(process.env.FILE_BASE_DIR || path.join(process.cwd(), "runtime/sandbox"));
 
 // Ensure the parent directory of a path exists
 async function ensureDir(dirPath) {

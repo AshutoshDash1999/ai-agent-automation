@@ -122,7 +122,7 @@ async function runTests() {
 
   // Cleanup test files
   try {
-    const testFilePath = path.join(process.cwd(), "runtime/test_sandbox_file.txt");
+    const testFilePath = path.join(process.cwd(), "runtime/sandbox/runtime/test_sandbox_file.txt");
     if (fs.existsSync(testFilePath)) {
       fs.unlinkSync(testFilePath);
     }
