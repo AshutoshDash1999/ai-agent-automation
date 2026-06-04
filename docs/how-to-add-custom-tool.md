@@ -190,7 +190,6 @@ const { runToolInSandbox } = require("./src/tools/registry");
 ```bash
 node test-mytool.js
 ```
-git 
 ---
 
 ## 7. Checklist Before Raising a PR
