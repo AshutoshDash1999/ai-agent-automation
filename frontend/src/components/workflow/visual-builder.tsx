@@ -302,6 +302,8 @@ export default function VisualBuilder({
           target: idMap.get(edge.target) || edge.target,
         }));
 
+        historyRef.current.push({ steps: [...steps], edges: [...flowEdges] });
+        futureRef.current = [];
         setSteps((prev) => [...prev, ...clonedSteps]);
         if (clonedEdges.length > 0) {
           setFlowEdges((prev) => [...prev, ...clonedEdges]);
@@ -344,6 +346,7 @@ export default function VisualBuilder({
         futureRef.current.push({ steps, edges: flowEdges });
         setSteps(snapshot.steps);
         setFlowEdges(snapshot.edges);
+        setSelectedNode(null);
         return;
       }
 
@@ -354,13 +357,12 @@ export default function VisualBuilder({
         historyRef.current.push({ steps, edges: flowEdges });
         setSteps(snapshot.steps);
         setFlowEdges(snapshot.edges);
+        setSelectedNode(null);
         return;
       }
 
       if (e.key === "Delete" && selectedNode) {
         e.preventDefault();
-        historyRef.current.push({ steps: [...steps], edges: [...flowEdges] });
-        futureRef.current = [];
         deleteNode(selectedNode.id);
         return;
       }
@@ -368,7 +370,7 @@ export default function VisualBuilder({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onSave, selectedNode, steps, deleteNode, setSteps]);
+  }, [onSave, selectedNode, steps, flowEdges, deleteNode, setSteps]);
 
   /* ---------- EVENTS ---------- */
 
@@ -377,10 +379,12 @@ export default function VisualBuilder({
   }, []);
 
   const handleEdgesDelete = useCallback((deletedEdges: any[]) => {
+    historyRef.current.push({ steps: [...steps], edges: [...flowEdges] });
+    futureRef.current = [];
     setFlowEdges((eds) =>
       eds.filter((edge) => !deletedEdges.some((d) => d.id === edge.id)),
     );
-  }, []);
+  }, [steps, flowEdges]);
 
   const onNodesChange = useCallback((changes: any) => {
     setNodes((nds) => {
@@ -461,7 +465,8 @@ export default function VisualBuilder({
 
       caseValue = value;
     }
-
+    historyRef.current.push({ steps: [...steps], edges: [...flowEdges] });
+    futureRef.current = [];
     setFlowEdges((eds) => {
       let filtered = eds;
 
@@ -486,10 +491,12 @@ export default function VisualBuilder({
   }, [steps, flowEdges]);
 
   const updateStep = useCallback((stepId: string, patch: any) => {
+    historyRef.current.push({ steps: [...steps], edges: [...flowEdges] });
+    futureRef.current = [];
     setSteps((prev) =>
       prev.map((s) => (s.id === stepId ? { ...s, ...patch } : s)),
     );
-  }, [setSteps]);
+  }, [steps, flowEdges, setSteps]);
 
   const updateNodeLabel = useCallback((stepId: string, name: string, type: string) => {
     const step = steps.find((s) => s.id === stepId);
@@ -646,6 +653,8 @@ export default function VisualBuilder({
       },
     };
 
+    historyRef.current.push({ steps: [...steps], edges: [...flowEdges] });
+    futureRef.current = [];
     setNodes((n) => [...n, node]);
     setSteps((prev) => [
       ...prev,
@@ -656,7 +665,7 @@ export default function VisualBuilder({
         prompt: "",
       },
     ]);
-  }, [deleteNode, setNodes, setSteps]);
+  }, [deleteNode, steps, flowEdges, setNodes, setSteps]);
 
   return (
     <div className="h-[720px] rounded-xl border bg-gradient-to-b from-background to-muted/40 relative overflow-hidden">
