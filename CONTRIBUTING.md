@@ -89,6 +89,11 @@ npm run dev
 * UI/UX improvements
 * Documentation improvements
 
+### ➕ Adding New Features
+
+To add a new custom tool to the platform, follow the step-by-step guide:
+👉 [How to Add a Custom Tool](docs/how-to-add-custom-tool.md)
+
 ### ❌ Please Avoid
 
 * Breaking API contracts without discussion
