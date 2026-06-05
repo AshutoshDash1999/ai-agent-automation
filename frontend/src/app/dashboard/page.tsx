@@ -67,7 +67,12 @@ function DashboardPageInner() {
 
   const { data: stats, loading: statsLoading } = useApi<DashboardStats>("/dashboard/stats");
   const { data: tasks, loading: tasksLoading } = useApi<Task[]>("/tasks");
-  const { data: workflows, loading: workflowsLoading } = useApi<WorkflowType[]>("/workflows");
+  const { data: workflowsResponse, loading: workflowsLoading } =
+    useApi<any>("/workflows");
+
+  const workflowsArray = Array.isArray(workflowsResponse) 
+    ? workflowsResponse 
+    : (workflowsResponse?.data || workflowsResponse?.workflows || []);
 
   const recentTasks = useMemo(() => tasks?.slice(0, 8) ?? [], [tasks]);
 
@@ -159,7 +164,7 @@ function DashboardPageInner() {
                 <Card className="p-6">
                   <h2 className="mb-4 text-xl font-semibold">Your Workflows</h2>
                   <WorkflowList
-                    workflows={workflows ?? []}
+                    workflows={workflowsArray}
                     loading={workflowsLoading}
                   />
                 </Card>
