@@ -24,21 +24,40 @@ async function claimNextTask({ workerId = "worker-1" } = {}) {
  * completeTask - mark task completed, save results
  */
 async function completeTask(taskId, { success = true, stepResult = null } = {}) {
-  const update = {
-    status: success ? "completed" : "failed",
-  };
+  const task = await Task.findById(taskId);
+  if (!task) return null;
+
+  const update = { $set: {}, $push: {} };
+
+  update.$set.status = success ? "completed" : "failed";
 
   if (!success) {
-    const task = await Task.findById(taskId);
-
     if ((task.attempts || 0) < maxAttempts) {
-      update.status = "retrying"; // 🔥 NEW STATE
+      update.$set.status = "retrying";
+      update.$push.retryHistory = {
+        attempt: task.attempts,
+        startedAt: task.startedAt,
+        failedAt: new Date(),
+        error: "Step execution failed or timed out",
+        stepResults: task.stepResults || []
+      };
+
+      update.$set.stepResults = [];
+      update.$set.startedAt = null;
     } else {
-      update.status = "failed";   // 🔥 FINAL STATE
+      update.$set.status = "failed";
     }
+  } else {
+    update.$set.completedAt = new Date();
   }
-  if (success) update.completedAt = new Date();
-  if (stepResult) update.$push = { stepResults: stepResult };
+
+  if (stepResult && !update.$set.stepResults) {
+    update.$push.stepResults = stepResult;
+  }
+
+  if (Object.keys(update.$push).length === 0) delete update.$push;
+  if (Object.keys(update.$set).length === 0) delete update.$set;
+
   return Task.findByIdAndUpdate(taskId, update, { new: true });
 }
 
