@@ -479,6 +479,9 @@ export default function WorkflowBuilderPage() {
 
   async function saveWorkflow() {
     try {
+      const savedSteps = JSON.stringify(steps);
+      const savedEdges = JSON.stringify(edges);
+
       const enrichedSteps = enrichStepsWithEdges(steps, edges);
 
       const backendSteps = enrichedSteps.map((s) => {
@@ -682,7 +685,9 @@ export default function WorkflowBuilderPage() {
         title: "Workflow saved",
         description: "Your workflow steps were updated successfully",
       });
-      setHasUnsavedChanges(false);
+      if (JSON.stringify(steps) === savedSteps && JSON.stringify(edges) === savedEdges) {
+        setHasUnsavedChanges(false);
+      }
     } catch (err) {
       console.error("Save workflow failed:", err);
       addToast({
