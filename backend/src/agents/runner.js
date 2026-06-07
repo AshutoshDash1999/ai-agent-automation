@@ -7,6 +7,7 @@ const { claimNextTask, completeTask } = require("./queueService");
 const { executeStep } = require("./executor");
 const telemetryService = require("../services/telemetry.service");
 const WORKER_ID = process.env.WORKER_ID || "agent-1";
+const EventEmitter = require("events");
 require("dotenv").config();
 
 /* -------------------------
@@ -60,6 +61,7 @@ async function getGlobalWorkerSettings() {
 ------------------------- */
 let isRunningLoop = false;
 let activeThreadsCount = 0;
+const workerEvents = new EventEmitter();
 
 async function executeSingleTask(task) {
   try {
@@ -310,7 +312,19 @@ async function runWorkerLoop() {
       const limit = Number(process.env.WORKER_CONCURRENCY_LIMIT || 5);
 
       if (activeThreadsCount >= limit) {
-        await sleep(500); // Back off and wait for a free slot
+        // Wait until a slot is freed, or timeout after 5000ms as a fallback
+        await new Promise((resolve) => {
+          const onSlotFree = () => {
+            workerEvents.off("slot_free", onSlotFree);
+            clearTimeout(timeout);
+            resolve();
+          };
+          const timeout = setTimeout(() => {
+            workerEvents.off("slot_free", onSlotFree);
+            resolve();
+          }, 5000);
+          workerEvents.once("slot_free", onSlotFree);
+        });
         continue;
       }
 
@@ -325,6 +339,7 @@ async function runWorkerLoop() {
       activeThreadsCount++;
       executeSingleTask(task).finally(() => {
         activeThreadsCount--;
+        workerEvents.emit("slot_free");
       });
 
     } catch (error) {
