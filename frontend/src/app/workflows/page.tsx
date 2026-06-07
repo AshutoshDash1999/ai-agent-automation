@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAssistantContext } from "@/context/assistant-context";
 import {
   DropdownMenu,
@@ -102,7 +103,7 @@ export default function WorkflowsPage() {
           Authorization: "Bearer " + (localStorage.getItem("token") ?? ""),
         },
       });
-
+      
       const data = await res.json();
       setWorkflows(data.workflows || []);
     } catch (err) {
@@ -220,7 +221,19 @@ export default function WorkflowsPage() {
             </div>
 
             {loading ? (
-              <p className="opacity-70">Loading workflows...</p>
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Card key={i} className="p-6">
+                    <div className="space-y-4">
+                      <Skeleton className="h-6 w-3/4" />
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-5/6" />
+                      <Skeleton className="h-4 w-1/2" />
+                      <Skeleton className="h-8 w-24" />
+                    </div>
+                 </Card>
+                ))}
+              </div>
             ) : (
               <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
                 {workflows.map((workflow) => (

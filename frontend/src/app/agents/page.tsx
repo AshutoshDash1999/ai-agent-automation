@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Plus, Trash2, Cpu, Thermometer, Zap } from "lucide-react";
 import { useAssistantContext } from "@/context/assistant-context";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -67,21 +68,24 @@ export default function AgentsPage() {
   }
 
   async function fetchAgents() {
-    try {
-      const res = await fetch(apiUrl("/agents"), {
-        headers: {
-          Authorization: "Bearer " + localStorage.getItem("token"),
-        },
-      });
-
-      const data = await res.json();
-      if (data.ok) setAgents(data.agents as Agent[]);
-    } catch (err) {
-      console.error("Error fetching agents:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  try {
+    console.log("Fetching agents...");
+    setLoading(true);
+    const res = await fetch(apiUrl("/agents"), {
+      headers: {
+        Authorization: "Bearer " + localStorage.getItem("token"),
+      },
+    });
+    console.log("Response received");
+    
+    const data = await res.json();
+    console.log("Agent data:", data);
+ } catch (err) {
+  console.error("Error fetching agents:", err);
+} finally {
+  setLoading(false);
+}
+}
 
   useEffect(() => {
     fetchAgents();
@@ -148,7 +152,18 @@ export default function AgentsPage() {
             </div>
 
             {loading ? (
-              <p className="opacity-70">Loading agents…</p>
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {[...Array(6)].map((_, index) => (
+                  <Card key={index} className="p-6">
+                    <div className="space-y-4">
+                      <Skeleton className="h-6 w-3/4" />
+                      <Skeleton className="h-4 w-1/2" />
+                      <Skeleton className="h-20 w-full" />
+                      <Skeleton className="h-8 w-24" />
+                    </div>
+                  </Card>
+                ))}
+              </div>
             ) : agents.length === 0 ? (
               <p className="opacity-60">No agents created yet.</p>
             ) : (

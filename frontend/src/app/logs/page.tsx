@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Download, Pause, Play, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAssistantContext } from "@/context/assistant-context";
 import { apiUrl } from "@/lib/api";
 
@@ -61,6 +62,15 @@ function getLogBadge(log: Log) {
 
   return log.level.toUpperCase();
 }
+function LogRowSkeleton() {
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <Skeleton className="h-5 w-20" />
+      <Skeleton className="h-6 w-16" />
+      <Skeleton className="h-4 flex-1" />
+    </div>
+  );
+}
 
 /* -------------------------
    Page
@@ -86,6 +96,7 @@ export default function LogsPage() {
         },
         cache: "no-store",
       });
+     
 
       const data = await res.json();
 
@@ -209,8 +220,12 @@ export default function LogsPage() {
               >
                 <div className="space-y-1 font-mono text-sm">
                   {loading && (
-                    <p className="text-muted-foreground">Loading logs…</p>
-                  )}
+                    <>
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <LogRowSkeleton key={i} />
+                      ))}
+                      </>
+                    )}
 
                   {!loading && logs.length === 0 && (
                     <p className="text-muted-foreground">

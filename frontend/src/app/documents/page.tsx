@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import Link from "next/link";
 import { useAssistantContext } from "@/context/assistant-context";
 import {
@@ -33,7 +34,7 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState("");
-
+  const [loading, setLoading] = useState(true);
   const { setContext, clearContext } = useAssistantContext();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { addToast } = useToast();
@@ -42,22 +43,24 @@ export default function DocumentsPage() {
 
   async function fetchDocuments() {
     try {
+      setLoading(true);
       const res = await fetch(apiUrl("/documents"), {
         headers: {
           Authorization: "Bearer " + localStorage.getItem("token"),
         },
       });
-
+      
       const data = await res.json();
 
       if (data.ok) {
         setDocuments(data.documents || []);
       }
-    } catch (err) {
-      console.error(err);
-    }
+      } catch (err) {
+    console.error(err);
+  } finally {
+    setLoading(false);
   }
-
+}
   useEffect(() => {
     fetchDocuments();
   }, []);
@@ -248,11 +251,24 @@ export default function DocumentsPage() {
             )}
 
             {/* Document Grid */}
-            {filteredDocs.length > 0 && (
-              <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-
-                {filteredDocs.map((doc) => (
-                  <Link key={doc._id} href={`/documents/${doc._id}`}>
+           {loading ? (
+            <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Card key={i} className="p-5">
+                  <div className="space-y-4">
+                   <Skeleton className="h-10 w-10" />
+                   <Skeleton className="h-5 w-3/4" />
+                   <Skeleton className="h-4 w-full" />
+                   <Skeleton className="h-4 w-2/3" />
+                   <Skeleton className="h-8 w-24" />
+                  </div>
+                </Card>
+             ))}
+           </div>
+        ) : filteredDocs.length > 0 && (
+          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {filteredDocs.map((doc) => ( (
+              <Link key={doc._id} href={`/documents/${doc._id}`}>
 
                     <Card className="p-5 flex flex-col justify-between cursor-pointer transition-all hover:border-primary hover:shadow-lg hover:-translate-y-0.5">
 
@@ -320,7 +336,7 @@ export default function DocumentsPage() {
                     </Card>
 
                   </Link>
-                ))}
+                )))}
 
               </div>
             )}
