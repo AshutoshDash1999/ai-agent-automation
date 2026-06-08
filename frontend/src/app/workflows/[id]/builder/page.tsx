@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import VisualBuilder from "@/components/workflow/visual-builder";
 import { Textarea } from "@/components/ui/textarea";
 import { useEffect } from "react";
-import { Save, Play, Plus, Trash2, AlertTriangle } from "lucide-react";
+import { Save, Play, Plus, Trash2, AlertTriangle, Download } from "lucide-react";
 import { generateNodeId } from "@/utils/ids"; // ✅ Using centralized ID system
 import {
   Select,
@@ -722,6 +722,31 @@ export default function WorkflowBuilderPage() {
     );
   }
 
+  async function handleExport() {
+    try {
+      const res = await fetch(apiUrl(`/workflows/${id}/export`), {
+        headers: {
+          Authorization: "Bearer " + localStorage.getItem("token"),
+        },
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${workflowName?.replace(/\s+/g, "_") ?? id}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export failed:", err);
+      addToast({
+        type: "error",
+        title: "Export failed",
+        description: "Could not export workflow. Try again.",
+      });
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-screen">
@@ -784,6 +809,10 @@ export default function WorkflowBuilderPage() {
                   </span>
                 )}
 
+                <Button variant="outline" onClick={handleExport} disabled={hasUnsavedChanges}>
+                  <Download className="mr-2 size-4" />
+                  Export JSON
+                </Button>
                 <Button
                   variant="outline"
                   onClick={() => {
