@@ -1,5 +1,6 @@
 const Workflow = require("../models/workflow.model");
 const Task = require("../models/task.model");
+const workflowVersionService = require("../services/workflowVersion.service");
 
 /** Create a new workflow */
 async function createWorkflow(req, res) {
@@ -12,6 +13,10 @@ async function createWorkflow(req, res) {
       agentId: agentId || null,
       metadata: metadata || {},
     });
+
+    // Create initial version configuration snapshot
+    await workflowVersionService.createVersionIfNeeded(workflow, req.user._id, "Initial version");
+
     res.status(201).json({ ok: true, workflow });
   } catch (err) {
     console.error("createWorkflow error", err);
@@ -60,6 +65,9 @@ async function updateWorkflow(req, res) {
     }
 
     await workflow.save();
+
+    // Create a new version if name, description, or agentId configuration details changed
+    await workflowVersionService.createVersionIfNeeded(workflow, req.user._id, "Updated details");
 
     res.json({ ok: true, workflow });
   } catch (err) {
@@ -132,6 +140,9 @@ async function assignAgent(req, res) {
     const { agentId } = req.body;
     workflow.agentId = agentId || null;
     await workflow.save();
+
+    // Create a new version for this execution settings change
+    await workflowVersionService.createVersionIfNeeded(workflow, req.user._id, "Assigned agent");
 
     return res.json({ ok: true, workflow });
   } catch (err) {
@@ -248,6 +259,9 @@ async function updateWorkflowSteps(req, res) {
     workflow.markModified("metadata");
 
     await workflow.save();
+
+    // Create a new version if steps or edges changed
+    await workflowVersionService.createVersionIfNeeded(workflow, req.user._id, "Updated graph configuration");
 
     return res.json({ ok: true, workflow });
   } catch (err) {

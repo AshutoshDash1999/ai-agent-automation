@@ -17,7 +17,9 @@ import {
   Circle,
   XCircle,
   Download,
+  History,
 } from "lucide-react";
+import VersionHistoryDialog from "@/components/workflow/version-history-dialog";
 import {
   Select,
   SelectContent,
@@ -206,6 +208,7 @@ export default function WorkflowDetailPage() {
   const [agentMap, setAgentMap] = useState<Record<string, string>>({});
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
+  const [historyOpen, setHistoryOpen] = useState<boolean>(false);
   const { addToast } = useToast();
 
   function getStepStatus(stepId: string): "pending" | "completed" | "failed" {
@@ -505,6 +508,11 @@ export default function WorkflowDetailPage() {
               </Button>
             </Link>
 
+            <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
+              <History className="mr-2 size-4" />
+              Version History
+            </Button>
+
             <Button variant="outline" size="sm" onClick={exportWorkflow}>
               <Download className="mr-2 size-4" />
               Export Workflow
@@ -559,6 +567,13 @@ export default function WorkflowDetailPage() {
               )}
             </div>
           </Card>
+
+          <VersionHistoryDialog
+            workflowId={workflow._id}
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            onRollbackSuccess={fetchWorkflow}
+          />
         </div>
       </main>
     </div>
