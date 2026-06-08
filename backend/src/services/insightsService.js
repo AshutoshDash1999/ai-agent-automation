@@ -14,10 +14,55 @@ function clamp(val, min = 0, max = 100) {
   return Math.max(min, Math.min(max, val));
 }
 
+function getStepId(step) {
+  return step?.stepId || step?.id || step?.name || null;
+}
+
+function normalizeBranchLabel(label, stepType) {
+  if (label == null || label === "") {
+    return stepType === "switch" ? "default" : "unknown";
+  }
+  const value = String(label);
+  return stepType === "switch" ? value.toLowerCase().trim() : value;
+}
+
+function getBranchLabelFromEdge(edge, stepType) {
+  if (stepType === "condition") {
+    return normalizeBranchLabel(edge.condition, stepType);
+  }
+  if (stepType === "switch") {
+    if (edge.caseValue != null && edge.caseValue !== "") {
+      return normalizeBranchLabel(edge.caseValue, stepType);
+    }
+    return "default";
+  }
+  return "unknown";
+}
+
+function getPossibleBranches(stepId, stepType, edges = []) {
+  return edges
+    .filter((edge) => edge.source === stepId)
+    .map((edge) => getBranchLabelFromEdge(edge, stepType));
+}
+
+function extractBranchOutcome(stepResult) {
+  if (!stepResult) return null;
+  if (stepResult.type === "condition") {
+    return stepResult.branch != null ? String(stepResult.branch) : null;
+  }
+  if (stepResult.type === "switch") {
+    if (stepResult.caseValue != null && stepResult.caseValue !== "") {
+      return normalizeBranchLabel(stepResult.caseValue, "switch");
+    }
+    return "default";
+  }
+  return null;
+}
+
 // ─── 1. Workflow-level success & duration ───────────────────────────────────
 
-async function getWorkflowRunStats(workflowId, limit = DEFAULT_LIMIT) {
-  const tasks = await Task.find({ workflowId })
+async function getWorkflowRunStats(workflowId, userId, limit = DEFAULT_LIMIT) {
+  const tasks = await Task.find({ workflowId, userId })
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();
@@ -88,51 +133,85 @@ function computeStepStats(tasks) {
 
 // ─── 3. Branch routing skew analysis ────────────────────────────────────────
 
-function computeBranchRouting(tasks) {
-  const branchMap = {}; // conditionStepId → { outcomes: { label: count } }
+function ensureBranchEntry(branchMap, stepId, stepType, edges = []) {
+  if (!stepId || !["condition", "switch"].includes(stepType)) return;
+
+  if (!branchMap[stepId]) {
+    const outcomes = {};
+    for (const label of getPossibleBranches(stepId, stepType, edges)) {
+      outcomes[label] = 0;
+    }
+    branchMap[stepId] = { stepId, type: stepType, outcomes, totalTraversals: 0 };
+    return;
+  }
+
+  for (const label of getPossibleBranches(stepId, stepType, edges)) {
+    if (!(label in branchMap[stepId].outcomes)) {
+      branchMap[stepId].outcomes[label] = 0;
+    }
+  }
+}
+
+function computeBranchRouting(tasks, workflowSteps = [], workflowEdges = []) {
+  const branchMap = {};
+
+  for (const step of workflowSteps) {
+    if (!["condition", "switch"].includes(step.type)) continue;
+    ensureBranchEntry(branchMap, getStepId(step), step.type, workflowEdges);
+  }
 
   for (const task of tasks) {
-    const steps = task.steps || [];
-    const results = task.stepResults || [];
+    const taskEdges =
+      Array.isArray(task.metadata?.edges) && task.metadata.edges.length > 0
+        ? task.metadata.edges
+        : workflowEdges;
+    const taskSteps = Array.isArray(task.steps) && task.steps.length > 0 ? task.steps : workflowSteps;
 
-    for (const step of steps) {
+    for (const step of taskSteps) {
       if (!["condition", "switch"].includes(step.type)) continue;
+      ensureBranchEntry(branchMap, getStepId(step), step.type, taskEdges);
+    }
 
-      const key = step.id || step.stepId;
-      if (!key) continue;
-      if (!branchMap[key]) {
-        branchMap[key] = { stepId: key, type: step.type, outcomes: {}, totalTraversals: 0 };
+    for (const stepResult of task.stepResults || []) {
+      if (!["condition", "switch"].includes(stepResult.type)) continue;
+
+      const stepId = stepResult.stepId;
+      if (!stepId) continue;
+
+      const taskStep = taskSteps.find((step) => getStepId(step) === stepId);
+      const stepType = stepResult.type || taskStep?.type;
+      ensureBranchEntry(branchMap, stepId, stepType, taskEdges);
+
+      const outcome = extractBranchOutcome(stepResult);
+      if (outcome == null) continue;
+
+      if (!(outcome in branchMap[stepId].outcomes)) {
+        branchMap[stepId].outcomes[outcome] = 0;
       }
-
-      // find the matching step result to see which branch was taken
-      const sr = results.find((r) => r.stepId === key);
-      if (!sr) continue;
-
-      const outcome = sr.output?.branch || sr.output?.outcome || sr.output?.result || "unknown";
-      branchMap[key].outcomes[outcome] = (branchMap[key].outcomes[outcome] || 0) + 1;
-      branchMap[key].totalTraversals++;
+      branchMap[stepId].outcomes[outcome] += 1;
+      branchMap[stepId].totalTraversals += 1;
     }
   }
 
-  return Object.values(branchMap).map((b) => {
-    const total = b.totalTraversals;
-    const outcomeEntries = Object.entries(b.outcomes);
+  return Object.values(branchMap).map((branch) => {
+    const total = branch.totalTraversals;
+    const outcomeEntries = Object.entries(branch.outcomes);
 
-    const outcomePct = outcomeEntries.map(([label, count]) => ({
+    const outcomes = outcomeEntries.map(([label, count]) => ({
       label,
       count,
       pct: total ? parseFloat(((count / total) * 100).toFixed(1)) : 0,
     }));
 
-    const maxPct = outcomePct.length ? Math.max(...outcomePct.map((o) => o.pct)) : 0;
-    const isSkewed = maxPct >= 90;
-    const deadBranches = outcomeEntries.filter(([, c]) => c === 0).map(([l]) => l);
+    const maxPct = outcomes.length ? Math.max(...outcomes.map((o) => o.pct)) : 0;
+    const isSkewed = total > 0 && maxPct >= 90;
+    const deadBranches = outcomeEntries.filter(([, count]) => count === 0).map(([label]) => label);
 
     return {
-      stepId: b.stepId,
-      type: b.type,
+      stepId: branch.stepId,
+      type: branch.type,
       totalTraversals: total,
-      outcomes: outcomePct,
+      outcomes,
       isSkewed,
       deadBranches,
     };
@@ -291,8 +370,8 @@ function buildRecommendations({ runStats, stepStats, branchRouting, semanticMetr
  * @param {string} workflowId - MongoDB ObjectId string
  * @param {number} [limit=200]  - max runs to analyse
  */
-async function getWorkflowInsights(workflowId, limit = DEFAULT_LIMIT) {
-  const tasks = await Task.find({ workflowId })
+async function getWorkflowInsights(workflowId, userId, limit = DEFAULT_LIMIT, workflowDefinition = {}) {
+  const tasks = await Task.find({ workflowId, userId })
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();
@@ -301,9 +380,12 @@ async function getWorkflowInsights(workflowId, limit = DEFAULT_LIMIT) {
     return { workflowId, message: "No execution history found.", healthScore: null };
   }
 
-  const runStats = await getWorkflowRunStats(workflowId, limit);
+  const workflowSteps = workflowDefinition.steps || [];
+  const workflowEdges = workflowDefinition.edges || [];
+
+  const runStats = await getWorkflowRunStats(workflowId, userId, limit);
   const stepStats = computeStepStats(tasks);
-  const branchRouting = computeBranchRouting(tasks);
+  const branchRouting = computeBranchRouting(tasks, workflowSteps, workflowEdges);
   const semanticMetrics = computeSemanticMetrics(tasks);
   const healthScore = computeHealthScore({ runStats, stepStats, branchRouting, semanticMetrics });
   const recommendations = buildRecommendations({ runStats, stepStats, branchRouting, semanticMetrics });
@@ -361,7 +443,7 @@ async function getGlobalInsights(userId, limit = DEFAULT_LIMIT) {
   );
 
   const stepStats = computeStepStats(tasks);
-  const branchRouting = computeBranchRouting(tasks);
+  const branchRouting = computeBranchRouting(tasks, [], []);
   const semanticMetrics = computeSemanticMetrics(tasks);
   const runStats = { successRate: overallSuccessRate };
   const healthScore = computeHealthScore({ runStats, stepStats, branchRouting, semanticMetrics });

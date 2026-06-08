@@ -1,4 +1,5 @@
 // backend/src/controllers/insights.controller.js
+const Workflow = require("../models/workflow.model");
 const { getWorkflowInsights, getGlobalInsights } = require("../services/insightsService");
 
 /**
@@ -10,7 +11,18 @@ async function getWorkflowInsightsHandler(req, res) {
     const { workflowId } = req.params;
     const limit = parseInt(req.query.limit, 10) || 200;
 
-    const insights = await getWorkflowInsights(workflowId, limit);
+    const workflow = await Workflow.findById(workflowId).lean();
+    if (!workflow) {
+      return res.status(404).json({ error: "not_found" });
+    }
+    if (workflow.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+
+    const insights = await getWorkflowInsights(workflowId, req.user._id, limit, {
+      steps: workflow.metadata?.steps || [],
+      edges: workflow.metadata?.edges || [],
+    });
     return res.json(insights);
   } catch (err) {
     console.error("[InsightsController] getWorkflowInsights error:", err);
