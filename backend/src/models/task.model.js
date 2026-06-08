@@ -8,6 +8,8 @@ const StepResultSchema = new mongoose.Schema(
     stepId: { type: String },
     type: { type: String },
     tool: { type: String },
+    serverId: { type: String },
+    toolName: { type: String },
     position: {
       x: Number,
       y: Number,
@@ -128,6 +130,11 @@ const TaskSchema = new mongoose.Schema(
     attempts: {
       type: Number,
       default: 0
+    },
+    
+    retryHistory: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: []
     }
   },
   { timestamps: true }

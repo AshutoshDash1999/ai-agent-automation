@@ -16,7 +16,7 @@ import { apiUrl } from "@/lib/api";
 import { generateNodeId, generateEdgeId } from "@/utils/ids";
 import { duplicateNodesSafely } from "@/utils/graphValidation";
 import { Edge, applyNodeChanges, applyEdgeChanges } from "reactflow";
-import { X } from "lucide-react";
+import { X, AlertTriangle } from "lucide-react";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
 
 type StepType =
@@ -24,6 +24,7 @@ type StepType =
   | "HTTP"
   | "Delay"
   | "Tool"
+  | "MCP"
   | "Document"
   | "Condition"
   | "Switch"
@@ -59,6 +60,8 @@ function getNodeColor(type: string) {
       return "#2563eb"; // blue
     case "Tool":
       return "#f59e0b"; // orange
+    case "MCP":
+      return "#0f766e"; // teal
     case "Document":
       return "#16a34a"; // green
     case "Delay":
@@ -96,6 +99,11 @@ function buildNodePreview(step: any, edges: CustomEdge[], allSteps: any[]) {
 
   if (step.type === "Tool") {
     rows.push({ name: "tool", type: "string" });
+  }
+
+  if (step.type === "MCP") {
+    rows.push({ name: "server", type: step.serverId || "unset" });
+    rows.push({ name: "tool", type: step.toolName || "unset" });
   }
 
   if (step.type === "Document") {
@@ -143,11 +151,13 @@ function computeNodes(
   steps: any[],
   flowEdges: CustomEdge[],
   onDeleteNode: (id: string) => void,
+  invalidNodeIds: Set<string> = new Set()
 ): StepNode[] {
   if (!steps?.length) return [];
 
   return steps.map((step, index) => {
     const schema = buildNodePreview(step, flowEdges, steps);
+    const hasError = invalidNodeIds.has(step.id);
 
     return {
       id: step.id,
@@ -160,21 +170,25 @@ function computeNodes(
               <span className="font-semibold truncate flex items-center gap-2">
                 <span
                   className="w-2 h-2 rounded-full shrink-0"
-                  style={{ background: getNodeColor(step.type) }}
+                  style={{ background: hasError ? "#ef4444" : getNodeColor(step.type) }}
                 />
                 {step.name || "Untitled Step"}
               </span>
 
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDeleteNode(step.id);
-                }}
-                className="text-red-500 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100 transition"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-1">
+                {hasError && <AlertTriangle className="size-4 text-red-500" />} 
+
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteNode(step.id);
+                  }}
+                  className="text-red-500 hover:text-red-600 text-xs opacity-0 group-hover:opacity-100 transition"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             <div className="text-xs text-muted-foreground mb-2">
@@ -200,7 +214,7 @@ function computeNodes(
 style: {
         padding: "12px 16px",
         borderRadius: "12px",
-        border: `1px solid ${getNodeColor(step.type)}`,
+        border: `1px solid ${hasError ? '#ef4444' : getNodeColor(step.type)}`,
         background: "var(--card)",
         color: "var(--foreground)",
         fontSize: "14px",
@@ -209,7 +223,9 @@ style: {
         minWidth: 240,
         maxWidth: 240,
         textAlign: "center" as const,
-        boxShadow: `0 0 0 1px ${getNodeColor(step.type)}20, 0 2px 6px rgba(0,0,0,0.05)`,
+        boxShadow: hasError 
+          ? `0 0 0 2px rgba(239,68,68,0.3), 0 2px 6px rgba(0,0,0,0.05)`
+          : `0 0 0 1px ${getNodeColor(step.type)}20, 0 2px 6px rgba(0,0,0,0.05)`,
         touchAction: "none", 
       },
     };
@@ -222,20 +238,28 @@ export default function VisualBuilder({
   edges,
   onEdgesChange,
   onSave,
+  invalidNodeIds = [],
 }: {
   steps: any[];
   setSteps: React.Dispatch<React.SetStateAction<any[]>>;
   edges: any[];
   onEdgesChange: (edges: any[]) => void;
   onSave?: () => void;
+  invalidNodeIds?: string[];
 }) {
   usePerformanceMonitor("VisualBuilder");
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const historyRef = useRef<{ steps: any[]; edges: CustomEdge[] }[]>([]);
   const futureRef = useRef<{ steps: any[]; edges: CustomEdge[] }[]>([]);
   const [documents, setDocuments] = useState<any[]>([]);
+  const [mcpTools, setMcpTools] = useState<any[]>([]);
   const [flowEdges, setFlowEdges] = useState<CustomEdge[]>(() => edges || []);
   const selectedStep = steps.find((s) => s.id === selectedNode?.id);
+  const selectedMcpTool = mcpTools.find(
+    (tool) =>
+      tool.serverId === selectedStep?.serverId &&
+      tool.name === selectedStep?.toolName,
+  );
 
   useEffect(() => {
     onEdgesChange(flowEdges);
@@ -256,13 +280,13 @@ export default function VisualBuilder({
     [setSteps],
   );
 
-  const [computedNodes, setComputedNodes] = useState(() =>
-    computeNodes(steps, flowEdges, deleteNode),
-  );
+  const [computedNodes, setComputedNodes] = useState<Node[]>([]);
 
   useEffect(() => {
-    setComputedNodes(computeNodes(steps, flowEdges, deleteNode));
-  }, [steps, flowEdges, deleteNode]);
+    const nodesWithErrorsSet = new Set(invalidNodeIds);
+    
+    setComputedNodes(computeNodes(steps, flowEdges, deleteNode, nodesWithErrorsSet));
+  }, [steps, flowEdges, deleteNode, invalidNodeIds]);
 
   const [nodes, setNodes, _onNodesChange] = useNodesState(computedNodes);
 
@@ -579,6 +603,26 @@ export default function VisualBuilder({
   }, []);
 
   useEffect(() => {
+    async function fetchMcpTools() {
+      try {
+        const res = await fetch(apiUrl("/mcp/tools"), {
+          headers: {
+            Authorization: "Bearer " + localStorage.getItem("token"),
+          },
+        });
+        const data = await res.json();
+        if (data.ok) {
+          setMcpTools(data.tools || []);
+        }
+      } catch (err) {
+        console.error("Failed to load MCP tools", err);
+      }
+    }
+
+    fetchMcpTools();
+  }, []);
+
+  useEffect(() => {
     setNodes((nds) => {
       let changed = false;
       const next = nds.map((node) => {
@@ -586,13 +630,18 @@ export default function VisualBuilder({
         if (!step) return node;
 
         const isSelected = selectedNode?.id === node.id;
+        const borderString = String(node.style?.border || "");
+        const isInvalid = borderString.includes('#ef4444') || borderString.includes('rgb(239, 68');
+        
+        const baseColor = isInvalid ? '#ef4444' : getNodeColor(step.type);
+
         const border = isSelected
-          ? "2px solid #3b82f6"
-          : `1px solid ${getNodeColor(step.type)}`;
+          ? `2px solid ${isInvalid ? '#dc2626' : '#3b82f6'}`
+          : `1px solid ${baseColor}`;
 
         const boxShadow = isSelected
-          ? "0 0 0 2px rgba(59,130,246,.35), 0 4px 12px rgba(0,0,0,.25)"
-          : `0 0 0 1px ${getNodeColor(step.type)}20, 0 2px 6px rgba(0,0,0,0.05)`;
+          ? `0 0 0 2px ${isInvalid ? 'rgba(220,38,38,.35)' : 'rgba(59,130,246,.35)'}, 0 4px 12px rgba(0,0,0,.25)`
+          : `0 0 0 1px ${baseColor}20, 0 2px 6px rgba(0,0,0,0.05)`;
 
         if (
           node.style?.border === border &&
@@ -772,6 +821,7 @@ export default function VisualBuilder({
                 <option value="HTTP">HTTP</option>
                 <option value="Delay">Delay</option>
                 <option value="Tool">Tool</option>
+                <option value="MCP">MCP</option>
                 <option value="Document">Document</option>
                 <option value="Condition">Condition</option>
                 <option value="Switch">Switch</option>
@@ -889,6 +939,97 @@ export default function VisualBuilder({
                   <option value="browser">Browser</option>
                 </select>
               </div>
+            )}
+
+            {selectedStep.type === "MCP" && (
+              <>
+                <div className="rounded-lg border border-muted p-3 text-xs text-muted-foreground">
+                  External MCP tools are discovered from your configured MCP
+                  servers in Settings.
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground">Server</label>
+                  <select
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 mt-1 bg-background"
+                    value={selectedStep.serverId || ""}
+                    onChange={(e) => {
+                      updateStep(selectedStep.id, {
+                        serverId: e.target.value,
+                        toolName: "",
+                      });
+                    }}
+                  >
+                    <option value="" disabled>Select server</option>
+                    {Array.from(
+                      new Map(
+                        mcpTools.map((tool) => [
+                          tool.serverId,
+                          tool.serverName || tool.serverId,
+                        ]),
+                      ).entries(),
+                    ).map(([serverId, serverName]) => (
+                      <option key={serverId} value={serverId}>
+                        {serverName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground">Tool</label>
+                  <select
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 mt-1 bg-background"
+                    value={selectedStep.toolName || ""}
+                    onChange={(e) =>
+                      updateStep(selectedStep.id, { toolName: e.target.value })
+                    }
+                    disabled={!selectedStep.serverId}
+                  >
+                    <option value="" disabled>Select tool</option>
+                    {mcpTools
+                      .filter((tool) => tool.serverId === selectedStep.serverId)
+                      .map((tool) => (
+                        <option key={tool.id} value={tool.name}>
+                          {tool.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground">
+                    Timeout (ms)
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 mt-1 bg-background"
+                    value={selectedStep.timeoutMs || 30000}
+                    onChange={(e) =>
+                      updateStep(selectedStep.id, {
+                        timeoutMs: Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground">
+                    Arguments (JSON)
+                  </label>
+                  <textarea
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 mt-1 bg-background min-h-[140px] font-mono text-xs"
+                    value={selectedStep.arguments || "{\n  \n}"}
+                    onChange={(e) =>
+                      updateStep(selectedStep.id, { arguments: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="rounded-lg border border-muted p-3">
+                  <div className="text-xs font-medium mb-2">Tool Schema</div>
+                  <pre className="text-[11px] leading-5 whitespace-pre-wrap break-words text-muted-foreground">
+                    {selectedMcpTool
+                      ? JSON.stringify(selectedMcpTool.inputSchema, null, 2)
+                      : "Select an MCP tool to inspect its input schema."}
+                  </pre>
+                </div>
+              </>
             )}
 
             {selectedStep.type === "Tool" && selectedStep.tool === "email" && (
