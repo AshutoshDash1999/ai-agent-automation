@@ -129,7 +129,7 @@ const WorkflowCard = memo(
     isCopied: boolean;
     onCopy: (id: string) => void;
     onEdit: (workflow: Workflow) => void;
-    onDelete: (id: string) => void;
+    onDelete: (workflow: Workflow) => void;
     onUpdate: () => void;
   }) => {
     const [isEditing, setIsEditing] = useState(false);
@@ -271,7 +271,7 @@ const WorkflowCard = memo(
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    onDelete(workflow._id);
+                    onDelete(workflow);
                   }}
                 >
                   Delete
@@ -291,7 +291,7 @@ const WorkflowCard = memo(
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                onDelete(workflow._id);
+                onDelete(workflow);
               }}
             >
               Delete
@@ -352,6 +352,7 @@ export default function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<false | "blank" | "template">(false);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
+  const [workflowToDelete, setWorkflowToDelete] = useState<Workflow | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentMap, setAgentMap] = useState<Record<string, string>>({});
   const { addToast } = useToast();
@@ -403,26 +404,9 @@ export default function WorkflowsPage() {
     }
   }, []);
 
-  const handleDeleteWorkflow = useCallback(async (id: string) => {
-    const confirmed = confirm("Delete this workflow? This cannot be undone.");
-    if (!confirmed) return;
-
-    try {
-      const res = await fetch(apiUrl(`/workflows/${id}`), {
-        method: "DELETE",
-        headers: {
-          Authorization: "Bearer " + (localStorage.getItem("token") ?? ""),
-        },
-      });
-
-      if (!res.ok) throw new Error("Failed");
-
-      addToast({ type: "success", title: "Workflow deleted" });
-      fetchWorkflows();
-    } catch (err) {
-      console.error("Delete failed:", err);
-    }
-  }, [addToast, fetchWorkflows]);
+  const handleDeleteClick = useCallback((workflow: Workflow) => {
+    setWorkflowToDelete(workflow);
+  }, []);
 
   useEffect(() => {
     fetchWorkflows();
@@ -665,16 +649,16 @@ export default function WorkflowsPage() {
                 ) : (
                   <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
                     {filteredWorkflows.map((workflow) => (
-                      <WorkflowCard
-                        key={workflow._id}
-                        workflow={workflow}
-                        agentName={getAgentName(workflow.agentId)}
-                        isCopied={copiedId === workflow._id}
-                        onCopy={copyId}
-                        onEdit={handleEditWorkflow}
-                        onDelete={handleDeleteWorkflow}
-                        onUpdate={fetchWorkflows}
-                      />
+                     <WorkflowCard
+  key={workflow._id}
+  workflow={workflow}
+  agentName={getAgentName(workflow.agentId)}
+  isCopied={copiedId === workflow._id}
+  onCopy={copyId}
+  onEdit={handleEditWorkflow}
+  onDelete={handleDeleteClick}
+  onUpdate={fetchWorkflows}
+/>
                     ))}
                   </div>
                 )}
@@ -691,6 +675,11 @@ export default function WorkflowsPage() {
         <EditWorkflowModal
           workflow={editingWorkflow}
           close={() => setEditingWorkflow(null)}
+          refresh={fetchWorkflows}
+        />
+        <DeleteWorkflowModal
+          workflow={workflowToDelete}
+          close={() => setWorkflowToDelete(null)}
           refresh={fetchWorkflows}
         />
       </div>
@@ -869,6 +858,73 @@ function EditWorkflowModal({
           </Button>
           <Button onClick={save} disabled={loading}>
             Save Changes
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteWorkflowModal({
+  workflow,
+  close,
+  refresh,
+}: {
+  workflow: Workflow | null;
+  close: () => void;
+  refresh: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const { addToast } = useToast();
+
+  async function confirmDelete() {
+    if (!workflow) return;
+    setLoading(true);
+    try {
+      const res = await fetch(apiUrl(`/workflows/${workflow._id}`), {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer " + (localStorage.getItem("token") ?? ""),
+        },
+      });
+
+      if (!res.ok) throw new Error("Delete failed");
+
+      addToast({ type: "success", title: "Workflow deleted" });
+      refresh();
+      close();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      addToast({ type: "error", title: "Failed to delete workflow" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={!!workflow}
+      onOpenChange={(open) => {
+        if (!open && !loading) close();
+      }}
+    >
+      <DialogContent
+        className="sm:max-w-md"
+        onEscapeKeyDown={(e) => loading && e.preventDefault()}
+        onPointerDownOutside={(e) => loading && e.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle>Delete Workflow</DialogTitle>
+          <DialogDescription className="text-foreground mt-4">
+            Are you sure you want to delete workflow <strong>"{workflow?.name}"</strong>? This action cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={close} disabled={loading}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={confirmDelete} disabled={loading}>
+            {loading ? "Deleting..." : "Delete"}
           </Button>
         </DialogFooter>
       </DialogContent>
