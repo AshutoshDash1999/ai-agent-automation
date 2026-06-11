@@ -1,5 +1,6 @@
 const Task = require("../models/task.model");
 const Workflow = require("../models/workflow.model"); // import workflow model
+const { getWorkflowGraph } = require("../utils/workflowMetadata");
 // -----------------------------
 // Utility: Response Helpers
 // -----------------------------
@@ -36,14 +37,8 @@ async function createTask(req, res) {
 
       agentId = workflow.agentId || null;
 
-      // ✅ SINGLE SOURCE OF TRUTH
-      steps = Array.isArray(workflow.metadata?.steps)
-        ? workflow.metadata.steps
-        : [];
-
-      edges = Array.isArray(workflow.metadata?.edges)
-        ? workflow.metadata.edges
-        : [];
+      // Single source of truth: workflow.metadata.{steps,edges}
+      ({ steps, edges } = getWorkflowGraph(workflow));
 
       if (steps.length === 0) {
         return sendError(res, 400, "workflow_has_no_steps");

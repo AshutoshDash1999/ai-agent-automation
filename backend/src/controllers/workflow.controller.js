@@ -1,6 +1,7 @@
 const Workflow = require("../models/workflow.model");
 const Task = require("../models/task.model");
 const workflowVersionService = require("../services/workflowVersion.service");
+const { normalizeWorkflowMetadata, getWorkflowGraph } = require("../utils/workflowMetadata");
 
 /** Create a new workflow */
 async function createWorkflow(req, res) {
@@ -11,7 +12,7 @@ async function createWorkflow(req, res) {
       description,
       userId: req.user._id,
       agentId: agentId || null,
-      metadata: metadata || {},
+      metadata: normalizeWorkflowMetadata(metadata),
     });
 
     // Create initial version configuration snapshot
@@ -162,12 +163,7 @@ async function runWorkflowNow(req, res) {
     if (workflow.userId.toString() !== req.user._id.toString())
       return res.status(403).json({ ok: false, error: "forbidden" });
 
-    const steps = Array.isArray(workflow.metadata?.steps)
-      ? workflow.metadata.steps
-      : [];
-    const edges = Array.isArray(workflow.metadata?.edges)
-      ? workflow.metadata.edges
-      : [];
+    const { steps, edges } = getWorkflowGraph(workflow);
 
     if (steps.length === 0) {
       return res.status(400).json({ ok: false, error: "workflow_has_no_steps" });
@@ -252,9 +248,7 @@ async function updateWorkflowSteps(req, res) {
       }))
       : [];
 
-    workflow.metadata = workflow.metadata || {};
-    workflow.metadata.steps = steps;
-    workflow.metadata.edges = edges;
+    workflow.metadata = normalizeWorkflowMetadata({ steps, edges });
 
     workflow.markModified("metadata");
 
@@ -278,6 +272,8 @@ async function exportWorkflow(req, res) {
     if (workflow.userId.toString() !== req.user._id.toString())
       return res.status(403).json({ ok: false, error: "forbidden" });
 
+    const { steps, edges } = getWorkflowGraph(workflow);
+
     const exportData = {
       id: workflow._id.toString(),
       name: workflow.name,
@@ -286,8 +282,8 @@ async function exportWorkflow(req, res) {
       icon: "",
       tags: [],
       agentId: workflow.agentId ? workflow.agentId.toString() : null,
-      steps: (workflow.metadata?.steps ?? []),
-      edges: (workflow.metadata?.edges ?? []),
+      steps,
+      edges,
     };
 
     res.setHeader("Content-Disposition", `attachment; filename="${workflow.name.replace(/\s+/g, "_")}.json"`);

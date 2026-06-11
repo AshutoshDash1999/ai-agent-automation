@@ -1,6 +1,7 @@
 // backend/src/controllers/insights.controller.js
 const Workflow = require("../models/workflow.model");
 const { getWorkflowInsights, getGlobalInsights } = require("../services/insightsService");
+const { getWorkflowGraph } = require("../utils/workflowMetadata");
 
 /**
  * GET /api/insights/workflows/:workflowId
@@ -19,9 +20,11 @@ async function getWorkflowInsightsHandler(req, res) {
       return res.status(403).json({ error: "forbidden" });
     }
 
+    const { steps, edges } = getWorkflowGraph(workflow);
+
     const insights = await getWorkflowInsights(workflowId, req.user._id, limit, {
-      steps: workflow.metadata?.steps || [],
-      edges: workflow.metadata?.edges || [],
+      steps,
+      edges,
     });
     return res.json(insights);
   } catch (err) {
