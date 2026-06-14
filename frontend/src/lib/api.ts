@@ -121,7 +121,7 @@ export function createWorkflow(payload: CreateWorkflowPayload): Promise<Workflow
 
 export function updateWorkflow(id: string, payload: UpdateWorkflowPayload): Promise<WorkflowApiResponse> {
   return api<WorkflowApiResponse>(`/workflows/${id}`, {
-    method: "PATCH",
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }

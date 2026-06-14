@@ -166,7 +166,7 @@ const WorkflowCard = memo(
       setIsSaving(true);
       try {
         const res = await fetch(apiUrl(`/workflows/${workflow._id}`), {
-          method: "PATCH",
+          method: "PUT",
           headers: {
             "Content-Type": "application/json",
             Authorization: "Bearer " + (localStorage.getItem("token") ?? ""),
@@ -448,7 +448,7 @@ export default function WorkflowsPage() {
       // POINT 3 FIX: Safely extract array regardless of API wrapper
       const workflowsArray = Array.isArray(data)
         ? data
-        : data.workflows || data.data || [];
+        : (data.workflows || data.data || []);
 
       setWorkflows(workflowsArray);
     } catch (err) {
@@ -652,6 +652,7 @@ export default function WorkflowsPage() {
             ) : (
               // Workflows exist! Show the new Toolbar and Grid
               <div className="space-y-6">
+
                 {/* ─── Control Toolbar ─── */}
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
                   <div className="relative flex-1">
@@ -1004,8 +1005,7 @@ function DeleteWorkflowModal({
         <DialogHeader>
           <DialogTitle>Delete Workflow</DialogTitle>
           <DialogDescription className="text-foreground mt-4">
-            Are you sure you want to delete workflow{" "}
-            <strong>"{workflow?.name}"</strong>? This action cannot be undone.
+            Are you sure you want to delete workflow <strong>&quot;{workflow?.name}&quot;</strong>? This action cannot be undone.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

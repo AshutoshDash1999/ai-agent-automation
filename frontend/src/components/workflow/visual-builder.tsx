@@ -1394,6 +1394,9 @@ export default function VisualBuilder({
                   onChange={(e) => updateStep(selectedStep.id, { message: e.target.value })}
                   placeholder="e.g. Please approve this email before it is sent."
                 />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Workflow execution will pause at this node until a human reviews and approves the pending task.
+                </p>
               </div>
             )}
           </div>

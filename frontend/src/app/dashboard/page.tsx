@@ -160,12 +160,11 @@ function DashboardPageInner() {
       <AppSidebar />
 
       <main
-        className="flex-1 transition-[padding] duration-300"
-        style={{ paddingLeft: "var(--sidebar-width, 256px)" }}
+        className="flex-1 transition-[padding] duration-300 md:pl-(--sidebar-width,256px)"
       >
-        <div className="p-8">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold">Dashboard</h1>
+        <div className="p-4 md:p-8 pt-16 md:pt-8">
+          <div className="mb-6 md:mb-8">
+            <h1 className="text-2xl md:text-3xl font-bold">Dashboard</h1>
             <p className="mt-2 text-muted-foreground">
               Overview of your AI automation workflows
             </p>
