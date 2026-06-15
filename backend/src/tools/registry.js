@@ -3,11 +3,47 @@ const { fork } = require("child_process");
 const path = require("path");
 
 /**
+ * Centralized dynamic tool dictionary tracking mapping properties to sandboxed files and execution methods.
+ * Adding a tool like HackerNews, Slack, or GitHub now only requires adding one line here.
+ */
+const toolRegistryMap = {
+  email: { toolName: "emailTool", functionName: "sendMail" },
+  file: { toolName: "fileTool", functionName: "handleAction" },
+  browser: { toolName: "browserTool", functionName: "handleAction" },
+  hackernews: { toolName: "hackerNewsTool", functionName: "fetchNews" },
+  slack_tool: { toolName: "slackTool", functionName: "postMessage" },
+  github_tool: { toolName: "githubTool", functionName: "processEvent" }
+};
+
+/**
+ * Checks if a workflow step type matches a registered sandboxed tool.
+ * @param {string} type 
+ * @returns {boolean}
+ */
+function hasTool(type) {
+  if (!type) return false;
+  return !!toolRegistryMap[type.toLowerCase()];
+}
+
+/**
+ * Dynamic Tool Dispatcher executing tasks under a uniform tool contract interface.
+ * @param {string} type - The incoming step type descriptor
+ * @param {Object} step - The layout properties configuration definition payload
+ * @param {Object} context - The operational workflow active run context variables
+ * @returns {Promise<any>}
+ */
+async function dispatchTool(type, step, context) {
+  const config = toolRegistryMap[type.toLowerCase()];
+  if (!config) {
+    throw new Error(`Execution Contract Violation: Missing tool registration for type '${type}'`);
+  }
+
+  // Passing arguments cleanly down to the underlying sandbox process boundary matching the run(step, context) specification contract
+  return await runToolInSandbox(config.toolName, config.functionName, [step, context]);
+}
+
+/**
  * Executes a tool in a separate process container for security/isolation.
- * @param {string} toolName - Name of the tool in the index registry (e.g. 'fileTool')
- * @param {string} functionName - Function to call on the tool (e.g. 'write')
- * @param {Array} args - Arguments to pass to the function
- * @returns {Promise<any>} The result of the tool execution
  */
 function runToolInSandbox(toolName, functionName, args = []) {
   return new Promise((resolve, reject) => {
@@ -21,7 +57,6 @@ function runToolInSandbox(toolName, functionName, args = []) {
       IS_SANDBOX: "true"
     };
 
-    // System-critical environment variables required for binary execution (e.g. Chrome/Puppeteer)
     const SYSTEM_ENV_VARS = ["PATH", "HOME", "USER", "NODE_ENV", "PWD"];
     for (const key of SYSTEM_ENV_VARS) {
       if (process.env[key] !== undefined) {
@@ -29,7 +64,6 @@ function runToolInSandbox(toolName, functionName, args = []) {
       }
     }
 
-    // Explicitly allowed variables for non-sensitive tool configurations
     const TOOL_CONFIG_VARS = [
       "FILE_BASE_DIR",
       "PUPPETEER_HEADLESS",
@@ -51,8 +85,8 @@ function runToolInSandbox(toolName, functionName, args = []) {
     }
 
     const forkOpts = {
-      stdio: ["inherit", "inherit", "inherit", "ipc"], // inherit standard output/error, enable IPC
-      execArgv: ["--max-old-space-size=256"], // limit process memory allocation
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      execArgv: ["--max-old-space-size=256"],
       env: allowedEnv
     };
 
@@ -64,18 +98,14 @@ function runToolInSandbox(toolName, functionName, args = []) {
     }
 
     const child = fork(workerPath, [], forkOpts);
-
     let finished = false;
 
-    // Timeout guard to prevent hanging or infinite-looping tool runs
     const timer = setTimeout(() => {
       if (!finished) {
         finished = true;
         try {
           child.kill("SIGKILL");
-        } catch (e) {
-          // ignore kill errors
-        }
+        } catch (e) {}
         reject(new Error(`Tool execution timed out after ${timeoutMs}ms.`));
       }
     }, timeoutMs);
@@ -110,9 +140,12 @@ function runToolInSandbox(toolName, functionName, args = []) {
       }
     });
 
-    // Dispatch job to the child process
     child.send({ toolName, functionName, args });
   });
 }
 
-module.exports = { runToolInSandbox };
+module.exports = { 
+  runToolInSandbox,
+  hasTool,
+  dispatchTool
+};

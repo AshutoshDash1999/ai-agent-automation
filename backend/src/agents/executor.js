@@ -7,6 +7,7 @@ const { runGitHub } = require('../integrations/github');
 const { runSlack } = require('../integrations/slack');
 const { runDiscord } = require('../integrations/discord');
 const { invokeTool: invokeMcpTool } = require('../mcp/executionAdapter');
+const { hasTool, dispatchTool } = require('../tools/registry');
 require('dotenv').config();
 
 // ─── UTILITY FUNCTIONS (MOVED TO TOP TO PREVENT REFERENCE ERRORS) ──────────────────
@@ -40,7 +41,6 @@ function resolveWorkflowFilePath(filePath) {
   }
 
   const workflowBaseDir = path.resolve(process.cwd(), 'runtime', 'workflow-files');
-
   const resolvedPath = path.resolve(workflowBaseDir, filePath);
   const relativePath = path.relative(workflowBaseDir, resolvedPath);
 
@@ -55,14 +55,10 @@ function resolveWorkflowFilePath(filePath) {
  * Core execution engine wrapper with built-in timeout enforcements
  */
 async function executeStep(step, context = {}, agent = null) {
-  // 1. Uniform step identification validation fallback
   const validatedStepId = step.stepId || step.id || step.name || null;
-
-  // 2. Validate and clean timeout configuration
   const explicitTimeout = Number(step.timeoutMs ?? step.timeout);
   const finalTimeoutMs = !isNaN(explicitTimeout) && explicitTimeout > 0 ? explicitTimeout : 30000;
 
-  // 3. Define timeout rejection promise
   let timeoutId = null;
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
@@ -71,7 +67,6 @@ async function executeStep(step, context = {}, agent = null) {
   });
 
   try {
-    // 4. Race the base step process against the isolation timeout monitor
     const result = await Promise.race([
       internalExecuteStep(step, context, agent, validatedStepId, finalTimeoutMs),
       timeoutPromise,
@@ -79,7 +74,6 @@ async function executeStep(step, context = {}, agent = null) {
 
     return result;
   } catch (err) {
-    // 5. Explicitly intercept timeout errors and bubble up failure signature
     const isTimeout = err.message?.includes('timed out');
     return {
       stepId: validatedStepId,
@@ -97,11 +91,13 @@ async function executeStep(step, context = {}, agent = null) {
 }
 
 /**
- * Isolated Tool Processing Logic
+ * Isolated Tool Processing Logic - Completely Decoupled Platform Implementation
  */
 async function internalExecuteStep(step, context, agent, validatedStepId, finalTimeoutMs) {
-  // ----- LLM -----
-  if (step.type === 'llm') {
+  const stepType = String(step.type || '').toLowerCase();
+
+  // ----- CORE ORCHESTRATION ENGINE PRIMITIVES -----
+  if (stepType === 'llm') {
     const prompt = interpolate(step.prompt, context);
     let finalPrompt = prompt;
     let memoryMetrics = null;
@@ -134,17 +130,7 @@ async function internalExecuteStep(step, context, agent, validatedStepId, finalT
           memoryText = memoryText.slice(0, MAX_MEMORY_CHARS);
         }
 
-        finalPrompt = `SYSTEM INSTRUCTION:
-You are an AI agent with persistent memory.
-The following MEMORY is factual and must be used when answering.
-
-MEMORY:
-${memoryText}
-
-USER QUESTION:
-${prompt}
-
-Use the MEMORY section to answer the question.`;
+        finalPrompt = `SYSTEM INSTRUCTION:\nYou are an AI agent with persistent memory.\nThe following MEMORY is factual and must be used when answering.\n\nMEMORY:\n${memoryText}\n\nUSER QUESTION:\n${prompt}\n\nUse the MEMORY section to answer the question.`;
       } else {
         memoryMetrics = {
           useMemory: true,
@@ -186,8 +172,7 @@ Use the MEMORY section to answer the question.`;
     return result;
   }
 
-  // Delay step
-  if (step.type === 'delay') {
+  if (stepType === 'delay') {
     const sec = Number(step.seconds ?? step.delay ?? step.prompt ?? 0);
     console.log('⏳ Delay step → sleeping for', sec, 'seconds');
     await new Promise((resolve) => setTimeout(resolve, sec * 1000));
@@ -203,8 +188,7 @@ Use the MEMORY section to answer the question.`;
     };
   }
 
-  // ----- HTTP -----
-  if (step.type === 'http') {
+  if (stepType === 'http') {
     let parsedBody = null;
     if (step.body) {
       const interpolated = interpolate(step.body, context);
@@ -235,136 +219,39 @@ Use the MEMORY section to answer the question.`;
     };
   }
 
-  // ----- EMAIL -----
-  if (step.type === 'email') {
-    const to = interpolate(step.to || '', context);
-    const subject = interpolate(step.subject || '', context);
-    const text = interpolate(step.text || '', context);
-    const html = interpolate(step.html || '', context);
-
-    const { runToolInSandbox } = require('../tools/registry');
-
-    const res = await runToolInSandbox('emailTool', 'sendMail', [
-      {
-        to,
-        subject,
-        text,
-        html,
-      },
-    ]);
-
-    return {
-      stepId: validatedStepId,
-      type: 'email',
-      tool: 'email',
-      input: { to, subject, text, html },
-      output: {
-        messageId: res.messageId,
-        accepted: res.accepted,
-      },
-      success: true,
-      timestamp: new Date(),
-    };
-  }
-
-  // ----- FILE -----
-  if (step.type === 'file') {
-    const action = (step.action || 'read').toLowerCase();
-    const requestedPath = step.path
-      ? interpolate(step.path, context)
-      : `stepName_${step.name}_TaskId_${context.taskId}.txt`;
-
-    resolveWorkflowFilePath(requestedPath);
-
-    const content = interpolate(step.content || '', context);
-    const { runToolInSandbox } = require('../tools/registry');
-
-    if (action === 'write') {
-      const res = await runToolInSandbox('fileTool', 'write', [requestedPath, content]);
+  // ─── DYNAMIC TOOL DISCOVERY & REGISTRY LOOKUP CONTRACT HANDOFF ──────────────────
+  if (hasTool(stepType)) {
+    try {
+      const toolResult = await dispatchTool(stepType, step, context);
       return {
         stepId: validatedStepId,
-        type: 'file',
-        tool: 'file',
-        input: { action, path: res.path, content },
-        output: { path: res.path },
+        type: stepType,
+        tool: stepType,
+        input: step.input || step.action || '[staged_sandbox_input]',
+        output: toolResult,
         success: true,
-        timestamp: new Date(),
+        timestamp: new Date()
       };
-    }
-    if (action === 'append') {
-      const res = await runToolInSandbox('fileTool', 'append', [requestedPath, content]);
+    } catch (toolError) {
+      // Gracefully capture sandbox configuration or execution failures without crashing or obscuring data
       return {
         stepId: validatedStepId,
-        type: 'file',
-        tool: 'file',
-        input: { action, path: res.path, content },
-        output: { path: res.path },
-        success: true,
-        timestamp: new Date(),
-      };
-    }
-    if (action === 'read') {
-      const res = await runToolInSandbox('fileTool', 'read', [requestedPath]);
-      return {
-        stepId: validatedStepId,
-        type: 'file',
-        tool: 'file',
-        input: { action, path: requestedPath },
-        output: res,
-        success: true,
-        timestamp: new Date(),
+        type: stepType,
+        tool: stepType,
+        input: step.action || '[sandbox_error_input]',
+        output: toolError.message,
+        success: false,
+        error: toolError.stack ? String(toolError.stack).slice(0, 1000) : undefined,
+        timestamp: new Date()
       };
     }
   }
 
-  // ----- BROWSER -----
-  if (step.type === 'browser') {
-    const action = (step.action || 'screenshot').toLowerCase();
-    const url = interpolate(step.url || '', context);
-    const { runToolInSandbox } = require('../tools/registry');
-
-    if (action === 'screenshot') {
-      const relativeOutPath = `screenshot_${context.taskId}_${Date.now()}.png`;
-      const res = await runToolInSandbox('browserTool', 'screenshot', [
-        url,
-        { path: relativeOutPath },
-      ]);
-      return {
-        stepId: validatedStepId,
-        type: 'browser',
-        tool: 'browser',
-        input: { action, url },
-        output: { path: res.path },
-        success: true,
-        timestamp: new Date(),
-      };
-    }
-    if (action === 'evaluate') {
-      const userCode = step.code || 'return document.title;';
-      const res = await runToolInSandbox('browserTool', 'evaluate', [url, userCode]);
-      return {
-        stepId: validatedStepId,
-        type: 'browser',
-        tool: 'browser',
-        input: { action, url, code: userCode },
-        output: res.result,
-        success: !res.result?.error,
-        timestamp: new Date(),
-      };
-    }
-  }
-
-  // ----- DOCUMENT QUERY -----
-  if (step.type === 'document_query') {
+  // ----- INTEGRATIONS & BASELINE CONDITIONAL ENGINES -----
+  if (stepType === 'document_query') {
     const { queryDocument } = require('../services/documentService');
     const query = interpolate(step.query || '', context);
-    const chunks = await queryDocument(
-      agent,
-      context.userId,
-      step.documentId,
-      query,
-      step.topK || 3
-    );
+    const chunks = await queryDocument(agent, context.userId, step.documentId, query, step.topK || 3);
 
     let contextText = chunks.map((c, i) => `Chunk ${i + 1}:\n${c.content}`).join('\n\n');
     if (contextText.length > 3000) contextText = contextText.slice(0, 3000);
@@ -387,15 +274,9 @@ Use the MEMORY section to answer the question.`;
     };
   }
 
-  // ----- CONDITION -----
-  if (step.type === 'condition') {
-    const normalize = (val) =>
-      String(val || '')
-        .toLowerCase()
-        .trim()
-        .replace(/[^\w\s]/g, '');
+  if (stepType === 'condition') {
+    const normalize = (val) => String(val || '').toLowerCase().trim().replace(/[^\w\s]/g, '');
     const rawOutput = context.last?.output || '';
-    const text = normalize(rawOutput);
     let evaluation = false;
 
     if (step.conditionType === 'boolean') {
@@ -417,11 +298,8 @@ Use the MEMORY section to answer the question.`;
     };
   }
 
-  // ----- SWITCH -----
-  if (step.type === 'switch') {
-    const output = String(context.last?.output || '')
-      .toLowerCase()
-      .trim();
+  if (stepType === 'switch') {
+    const output = String(context.last?.output || '').toLowerCase().trim();
     return {
       stepId: validatedStepId,
       type: 'switch',
@@ -434,8 +312,7 @@ Use the MEMORY section to answer the question.`;
     };
   }
 
-  // ----- MCP -----
-  if (step.type === 'mcp') {
+  if (stepType === 'mcp') {
     const execution = await invokeMcpTool({
       userId: context.userId,
       serverId: step.serverId,
@@ -455,43 +332,19 @@ Use the MEMORY section to answer the question.`;
     };
   }
 
-  // ----- GITHUB -----
-  if (step.type === 'github') {
+  if (stepType === 'github') {
     const output = await runGitHub(step, context, interpolate);
-    return {
-      stepId: validatedStepId,
-      type: 'github',
-      tool: 'github',
-      output,
-      success: true,
-      timestamp: new Date(),
-    };
+    return { stepId: validatedStepId, type: 'github', tool: 'github', output, success: true, timestamp: new Date() };
   }
 
-  // ----- SLACK -----
-  if (step.type === 'slack') {
+  if (stepType === 'slack') {
     const output = await runSlack(step, context, interpolate);
-    return {
-      stepId: validatedStepId,
-      type: 'slack',
-      tool: 'slack',
-      output,
-      success: true,
-      timestamp: new Date(),
-    };
+    return { stepId: validatedStepId, type: 'slack', tool: 'slack', output, success: true, timestamp: new Date() };
   }
 
-  // ----- DISCORD -----
-  if (step.type === 'discord') {
+  if (stepType === 'discord') {
     const output = await runDiscord(step, context, interpolate);
-    return {
-      stepId: validatedStepId,
-      type: 'discord',
-      tool: 'discord',
-      output,
-      success: true,
-      timestamp: new Date(),
-    };
+    return { stepId: validatedStepId, type: 'discord', tool: 'discord', output, success: true, timestamp: new Date() };
   }
 
   return {
@@ -499,7 +352,7 @@ Use the MEMORY section to answer the question.`;
     type: step.type || 'unknown',
     tool: step.tool || 'unknown',
     input: null,
-    output: `Unknown step type: ${step.type}`,
+    output: `Unknown step type or missing tool registry mapping: ${step.type}`,
     success: false,
     timestamp: new Date(),
   };
