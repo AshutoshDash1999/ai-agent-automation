@@ -66,20 +66,30 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   useEffect(() => {
-    const saved = localStorage.getItem("token");
+    let active = true;
 
-    if (saved && isTokenExpired(saved)) {
-      localStorage.removeItem("token");
+    queueMicrotask(() => {
+      if (!active) return;
+
+      const saved = localStorage.getItem("token");
+
+      if (saved && isTokenExpired(saved)) {
+        localStorage.removeItem("token");
+        setLoading(false);
+        return;
+      }
+
+      if (saved) {
+        setToken(saved);
+        hydrateUser(saved);
+      }
+
       setLoading(false);
-      return;
-    }
+    });
 
-    if (saved) {
-      setToken(saved);
-      hydrateUser(saved);
-    }
-
-    setLoading(false);
+    return () => {
+      active = false;
+    };
   }, [hydrateUser]);
 
   /* ---- Auto logout on token expiry (CRITICAL) ---- */

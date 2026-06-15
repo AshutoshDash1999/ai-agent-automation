@@ -127,6 +127,10 @@ function MultiDocumentChatContent() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const { setContext, clearContext } = useAssistantContext();
+  const nonReadyDocuments = useMemo(
+    () => documents.filter((document) => document.status && document.status !== "ready"),
+    [documents]
+  );
 
   useEffect(() => {
     setContext({
@@ -279,8 +283,6 @@ function MultiDocumentChatContent() {
       </AuthGuard>
     );
   }
-
-  const nonReadyDocuments = documents.filter((document) => document.status && document.status !== "ready");
 
   return (
     <AuthGuard>
