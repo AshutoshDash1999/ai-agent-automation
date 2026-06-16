@@ -1,53 +1,124 @@
 // backend/src/agents/executor.js
-const fs = require("fs");
-const path = require("path");
-const axios = require("axios");
-const { runLLM } = require("./llmAdapter");
-const { runGitHub } = require("../integrations/github");
-const { runSlack } = require("../integrations/slack");
-const { runDiscord } = require("../integrations/discord");
-const { invokeTool: invokeMcpTool } = require("../mcp/executionAdapter");
-const { WorkflowContext, interpolate } = require('./contextManager');
-require("dotenv").config();
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const { runLLM } = require('./llmAdapter');
+const { invokeTool: invokeMcpTool } = require('../mcp/executionAdapter');
+const { hasTool, dispatchTool } = require('../tools/registry');
+require('dotenv').config();
+
+// ─── UTILITY FUNCTIONS (MOVED TO TOP TO PREVENT REFERENCE ERRORS) ──────────────────
+
+function interpolate(template = '', context = {}) {
+  if (typeof template !== 'string') return template;
+  return template.replace(/\{\{(.*?)\}\}/g, (_, key) => {
+    const parts = key.trim().split('.');
+    let val = context;
+    for (const p of parts) {
+      if (val === undefined || val === null) break;
+      val = val[p];
+    }
+    if (val === undefined || val === null) return '';
+    if (typeof val === 'object') return JSON.stringify(val, null, 2);
+    return String(val);
+  });
+}
 
 function resolveWorkflowFilePath(filePath) {
-  if (typeof filePath !== "string" || filePath.trim() === "") {
-    throw new Error("Invalid file path");
+  if (typeof filePath !== 'string' || filePath.trim() === '') {
+    throw new Error('Invalid file path');
   }
 
-  if (filePath.includes("\0")) {
-    throw new Error("Invalid file path");
+  if (filePath.includes('\0')) {
+    throw new Error('Invalid file path');
   }
 
   if (path.isAbsolute(filePath) || path.win32.isAbsolute(filePath)) {
-    throw new Error("Invalid file path: absolute paths are not allowed");
+    throw new Error('Invalid file path: absolute paths are not allowed');
   }
 
-  const normalized = path.normalize(filePath);
-  if (normalized.includes("..")) {
-    throw new Error("Invalid file path: path traversal not allowed");
+  const workflowBaseDir = path.resolve(process.cwd(), 'runtime', 'workflow-files');
+  const resolvedPath = path.resolve(workflowBaseDir, filePath);
+  const relativePath = path.relative(workflowBaseDir, resolvedPath);
+
+  if (relativePath === '' || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Invalid file path: path escapes workflow directory');
   }
 
   return normalized;
 }
 
 async function executeStep(step, context = {}, agent = null) {
-  const start = Date.now();
+  const validatedStepId = step.stepId || step.id || step.name || null;
+  const explicitTimeout = Number(step.timeoutMs ?? step.timeout);
+  const finalTimeoutMs = !isNaN(explicitTimeout) && explicitTimeout > 0 ? explicitTimeout : 30000;
 
-  // Ensure context is WorkflowContext instance
-  const ctx = context instanceof WorkflowContext ? context : new WorkflowContext(context);
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Step execution timed out after ${finalTimeoutMs}ms`));
+    }, finalTimeoutMs);
+  });
 
   try {
-    // ----- LLM -----
-    if (step.type === "llm") {
-      const prompt = interpolate(step.prompt, ctx);
+    const result = await Promise.race([
+      internalExecuteStep(step, context, agent, validatedStepId, finalTimeoutMs),
+      timeoutPromise,
+    ]);
 
-      let finalPrompt = prompt;
+    return result;
+  } catch (err) {
+    const isTimeout = err.message?.includes('timed out');
+    return {
+      stepId: validatedStepId,
+      type: step.type || 'unknown',
+      tool: step.tool || 'unknown',
+      input: isTimeout ? '[timeout]' : '[error]',
+      output: err.message,
+      success: false,
+      error: err.stack ? String(err.stack).slice(0, 2000) : undefined,
+      timestamp: new Date(),
+    };
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
-      if (step.useMemory && agent) {
-        const { retrieveMemory } = require("../services/memoryService");
+/**
+ * Isolated Tool Processing Logic - Completely Decoupled Platform Implementation
+ */
+async function internalExecuteStep(step, context, agent, validatedStepId, finalTimeoutMs) {
+  const stepType = String(step.type || '').toLowerCase();
 
-        const memories = await retrieveMemory(agent, prompt, step.memoryTopK || 5);
+  // ----- CORE ORCHESTRATION ENGINE PRIMITIVES -----
+  if (stepType === 'llm') {
+    const prompt = interpolate(step.prompt, context);
+    let finalPrompt = prompt;
+    let memoryMetrics = null;
+
+    if (step.useMemory && agent) {
+      const { retrieveMemory } = require('../services/memoryService');
+      const memories = await retrieveMemory(agent, prompt, step.memoryTopK || 5);
+
+      if (memories.length > 0) {
+        const similarityScores = memories.map((m) => (typeof m.score === 'number' ? m.score : 0));
+        const averageSimilarity =
+          similarityScores.reduce((acc, s) => acc + s, 0) / similarityScores.length;
+
+        memoryMetrics = {
+          useMemory: true,
+          retrievedMemoriesCount: memories.length,
+          similarityScores,
+          averageSimilarity: Math.round(averageSimilarity * 1000) / 1000,
+        };
+
+        const MAX_MEMORY_CHARS = 4000;
+        let memoryText = memories
+          .map((m, i) => {
+            const parsed = JSON.parse(m.content);
+            return `Memory ${i + 1}:\nUser: ${parsed.user}\nAssistant: ${parsed.assistant}`;
+          })
+          .join('\n\n');
 
         if (memories.length > 0) {
           const MAX_MEMORY_CHARS = 4000;
@@ -59,139 +130,44 @@ async function executeStep(step, context = {}, agent = null) {
             })
             .join("\n\n");
 
-          if (memoryText.length > MAX_MEMORY_CHARS) {
-            memoryText = memoryText.slice(0, MAX_MEMORY_CHARS);
-          }
-
-          finalPrompt =
-            `SYSTEM INSTRUCTION:
-You are an AI agent with persistent memory.
-The following MEMORY is factual and must be used when answering.
-
-MEMORY:
-${memoryText}
-
-USER QUESTION:
-${prompt}
-
-Use the MEMORY section to answer the question.
-
-If the answer appears in MEMORY, respond using it.
-
-If MEMORY contains the project name or related information, return it clearly.
-Do not say you lack memory.`;
-
-          console.log("Retrieved memories:", memories.length);
-        }
-      }
-
-      const llmRes = await runLLM(finalPrompt, {
-        provider: agent?.config?.provider,
-        model: agent?.config?.model,
-        temperature: agent?.config?.temperature,
-        ...step.options
-      });
-
-      const result = {
-        stepId: step.stepId || null,
-        type: "llm",
-        tool: "llm",
-        input: prompt,
-        output: llmRes.text,
-        raw: llmRes.raw,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: prompt,
-        prompt: finalPrompt,
-        output: llmRes.text,
-        raw: llmRes.raw,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: prompt, output: llmRes.text };
-
-      if (step.useMemory && agent && llmRes.text) {
-        const { storeMemory } = require("../services/memoryService");
-
-        await storeMemory(
-          agent,
-          JSON.stringify({
-            user: prompt,
-            assistant: llmRes.text
-          }),
-          {
-            taskId: ctx.taskId,
-            workflowId: ctx.workflow?._id,
-            type: "conversation"
-          }
-        );
+        finalPrompt = `SYSTEM INSTRUCTION:\nYou are an AI agent with persistent memory.\nThe following MEMORY is factual and must be used when answering.\n\nMEMORY:\n${memoryText}\n\nUSER QUESTION:\n${prompt}\n\nUse the MEMORY section to answer the question.`;
+      } else {
+        memoryMetrics = {
+          useMemory: true,
+          retrievedMemoriesCount: 0,
+          similarityScores: [],
+          averageSimilarity: 0,
+        };
       }
 
       return result;
     }
 
-    // ----- DELAY -----
-    if (step.type === "delay") {
-      const sec = Number(step.seconds ?? step.delay ?? step.prompt ?? 0);
+    const llmRes = await runLLM(finalPrompt, {
+      provider: agent?.config?.provider,
+      model: agent?.config?.model,
+      temperature: agent?.config?.temperature,
+      ...step.options,
+    });
 
-      console.log("⏳ Delay step → sleeping for", sec, "seconds");
+    const result = {
+      stepId: validatedStepId,
+      type: 'llm',
+      tool: 'llm',
+      input: prompt,
+      output: llmRes.text,
+      raw: llmRes.raw,
+      success: true,
+      timestamp: new Date(),
+      ...(memoryMetrics ? { metrics: memoryMetrics } : {}),
+    };
 
-      await new Promise(resolve => setTimeout(resolve, sec * 1000));
-
-      const result = {
-        stepId: step.stepId,
-        type: "delay",
-        tool: "delay",
-        input: sec,
-        output: `Slept for ${sec} seconds`,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: sec,
-        prompt: null,
-        output: `Slept for ${sec} seconds`,
-        raw: null,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: sec, output: `Slept for ${sec} seconds` };
-
-      return result;
-    }
-
-    // ----- HTTP -----
-    if (step.type === "http") {
-      let parsedBody = null;
-
-      if (step.body) {
-        const interpolated = interpolate(step.body, ctx);
-        try {
-          parsedBody = JSON.parse(interpolated);
-        } catch (err) {
-          parsedBody = interpolated;
-        }
-      }
-
-      const response = await axios({
-        method: (step.method || "GET").toLowerCase(),
-        url: interpolate(step.url || "", ctx),
-        data: parsedBody,
-        headers: step.headers || {},
-        timeout: step.timeout || 30000,
-        validateStatus: () => true,
+    if (step.useMemory && agent && llmRes.text) {
+      const { storeMemory } = require('../services/memoryService');
+      await storeMemory(agent, JSON.stringify({ user: prompt, assistant: llmRes.text }), {
+        taskId: context.taskId,
+        workflowId: context.workflow?._id,
+        type: 'conversation',
       });
 
       const result = {
@@ -259,740 +235,174 @@ Do not say you lack memory.`;
           duration: Date.now() - start,
         };
 
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { to, subject, text, html },
-          prompt: null,
-          output: { messageId: info.messageId, accepted: info.accepted },
-          raw: info,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
+  if (stepType === 'delay') {
+    const sec = Number(step.seconds ?? step.delay ?? step.prompt ?? 0);
+    console.log('⏳ Delay step → sleeping for', sec, 'seconds');
+    await new Promise((resolve) => setTimeout(resolve, sec * 1000));
 
-        ctx.results.push(result);
-        ctx.last = { input: { to, subject, text, html }, output: { messageId: info.messageId, accepted: info.accepted } };
+    return {
+      stepId: validatedStepId,
+      type: 'delay',
+      tool: 'delay',
+      input: sec,
+      output: `Slept for ${sec} seconds`,
+      success: true,
+      timestamp: new Date(),
+    };
+  }
 
-        return result;
-      } catch (err) {
-        const result = {
-          stepId: step.stepId,
-          type: "email",
-          tool: "email",
-          input: null,
-          output: err.message,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: null,
-          prompt: null,
-          output: err.message,
-          raw: err,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: null, output: err.message };
-
-        return result;
-      }
-    }
-
-    // ----- FILE -----
-    if (step.type === "file") {
-      const action = (step.action || "read").toLowerCase();
-      const resolvedPath = resolveWorkflowFilePath(
-        step.path ? interpolate(step.path, ctx) : `runtime/stepName_${step.name}_TaskId_${ctx.taskId}.txt`
-      );
-      const content = interpolate(step.content || "", ctx);
-      const { runToolInSandbox } = require("../tools/registry");
-
+  if (stepType === 'http') {
+    let parsedBody = null;
+    if (step.body) {
+      const interpolated = interpolate(step.body, context);
       try {
-        let result;
-        if (action === "write") {
-          const res = await runToolInSandbox("fileTool", "write", [resolvedPath, content]);
-          result = {
-            stepId: step.stepId,
-            type: "file",
-            tool: "file",
-            input: { action, path: resolvedPath, content },
-            output: { path: res.path },
-            success: true,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        } else if (action === "append") {
-          const res = await runToolInSandbox("fileTool", "append", [resolvedPath, content]);
-          result = {
-            stepId: step.stepId,
-            type: "file",
-            tool: "file",
-            input: { action, path: resolvedPath, content },
-            output: { path: res.path },
-            success: true,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        } else if (action === "read") {
-          const res = await runToolInSandbox("fileTool", "read", [resolvedPath]);
-          result = {
-            stepId: step.stepId,
-            type: "file",
-            tool: "file",
-            input: { action, path: resolvedPath },
-            output: res,
-            success: true,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        } else {
-          result = {
-            stepId: step.stepId,
-            type: "file",
-            tool: "file",
-            input: { action },
-            output: `Unknown file action: ${action}`,
-            success: false,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        }
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: result.input,
-          prompt: null,
-          output: result.output,
-          raw: null,
-          success: result.success,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: result.input, output: result.output };
-
-        return result;
+        parsedBody = JSON.parse(interpolated);
       } catch (err) {
-        const result = {
-          stepId: step.stepId,
-          type: "file",
-          tool: "file",
-          input: { action, path: resolvedPath },
-          output: err.message,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action, path: resolvedPath },
-          prompt: null,
-          output: err.message,
-          raw: err,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action, path: resolvedPath }, output: err.message };
-
-        return result;
+        parsedBody = interpolated;
       }
     }
 
-    // ----- BROWSER -----
-    if (step.type === "browser") {
-      const action = (step.action || "screenshot").toLowerCase();
-      const url = interpolate(step.url || "", ctx);
-      const { runToolInSandbox } = require("../tools/registry");
+    const response = await axios({
+      method: (step.method || 'GET').toLowerCase(),
+      url: interpolate(step.url || '', context),
+      data: parsedBody,
+      headers: step.headers || {},
+      timeout: step.timeout || 30000,
+      validateStatus: () => true,
+    });
 
-      try {
-        let result;
-        if (action === "screenshot") {
-          const outPath = path.join("runtime", `screenshot_${ctx.taskId}_${Date.now()}.png`);
-          const res = await runToolInSandbox("browserTool", "screenshot", [url, { path: outPath }]);
-          result = {
-            stepId: step.stepId,
-            type: "browser",
-            tool: "browser",
-            input: { action, url },
-            output: { path: res.path },
-            success: true,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        } else if (action === "evaluate") {
-          const userCode = step.code || "return document.title;";
-          const res = await runToolInSandbox("browserTool", "evaluate", [url, userCode]);
-          result = {
-            stepId: step.stepId,
-            type: "browser",
-            tool: "browser",
-            input: { action, url, code: userCode },
-            output: res.result,
-            success: !res.result?.error,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        } else {
-          result = {
-            stepId: step.stepId,
-            type: "browser",
-            tool: "browser",
-            input: { action },
-            output: `Unknown browser action: ${action}`,
-            success: false,
-            timestamp: new Date(),
-            duration: Date.now() - start,
-          };
-        }
+    return {
+      stepId: validatedStepId,
+      type: 'http',
+      tool: 'http',
+      input: interpolate(step.url || '', context),
+      output: response.data,
+      success: response.status >= 200 && response.status < 300,
+      timestamp: new Date(),
+    };
+  }
 
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: result.input,
-          prompt: null,
-          output: result.output,
-          raw: null,
-          success: result.success,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: result.input, output: result.output };
-
-        return result;
-      } catch (err) {
-        const result = {
-          stepId: step.stepId,
-          type: "browser",
-          tool: "browser",
-          input: { action, url },
-          output: err.message,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action, url },
-          prompt: null,
-          output: err.message,
-          raw: err,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action, url }, output: err.message };
-
-        return result;
-      }
+  // ─── DYNAMIC TOOL DISCOVERY & REGISTRY LOOKUP CONTRACT HANDOFF ──────────────────
+  if (hasTool(stepType)) {
+    try {
+      const toolResult = await dispatchTool(stepType, step, context);
+      return {
+        stepId: validatedStepId,
+        type: stepType,
+        tool: stepType,
+        input: step.input || step.action || '[staged_sandbox_input]',
+        output: toolResult,
+        success: true,
+        timestamp: new Date()
+      };
+    } catch (toolError) {
+      // Gracefully capture sandbox configuration or execution failures without crashing or obscuring data
+      return {
+        stepId: validatedStepId,
+        type: stepType,
+        tool: stepType,
+        input: step.action || '[sandbox_error_input]',
+        output: toolError.message,
+        success: false,
+        error: toolError.stack ? String(toolError.stack).slice(0, 1000) : undefined,
+        timestamp: new Date()
+      };
     }
 
-    // ----- DOCUMENT QUERY -----
-    if (step.type === "document_query") {
-      const { queryDocument } = require("../services/documentService");
-      const documentId = step.documentId;
-      const query = interpolate(step.query || "", ctx);
+  // ----- INTEGRATIONS & BASELINE CONDITIONAL ENGINES -----
+  if (stepType === 'document_query') {
+    const { queryDocument } = require('../services/documentService');
+    const query = interpolate(step.query || '', context);
+    const chunks = await queryDocument(agent, context.userId, step.documentId, query, step.topK || 3);
 
-      const chunks = await queryDocument(
-        agent,
-        ctx.userId,
-        documentId,
-        query,
-        step.topK || 3
-      );
+    let contextText = chunks.map((c, i) => `Chunk ${i + 1}:\n${c.content}`).join('\n\n');
+    if (contextText.length > 3000) contextText = contextText.slice(0, 3000);
 
-      let contextText = chunks.map((c, i) => `Chunk ${i + 1}:\n${c.content}`).join("\n\n");
+    const finalPrompt = `DOCUMENT CONTEXT:\n${contextText}\n\nQUESTION:\n${query}`;
+    const llmRes = await runLLM(finalPrompt, {
+      provider: agent?.config?.provider,
+      model: agent?.config?.model,
+      temperature: agent?.config?.temperature,
+    });
 
-      const MAX_CONTEXT = 3000;
-      if (contextText.length > MAX_CONTEXT) {
-        contextText = contextText.slice(0, MAX_CONTEXT);
-      }
+    return {
+      stepId: validatedStepId,
+      type: 'document_query',
+      tool: 'document',
+      input: query,
+      output: llmRes.text,
+      success: true,
+      timestamp: new Date(),
+    };
+  }
 
-      const finalPrompt = `
-SYSTEM INSTRUCTION:
-You are answering questions using retrieved document context.
+  if (stepType === 'condition') {
+    const normalize = (val) => String(val || '').toLowerCase().trim().replace(/[^\w\s]/g, '');
+    const rawOutput = context.last?.output || '';
+    let evaluation = false;
 
-Rules:
-- Only use the provided document context.
-- If the answer is not in the context, say "The document does not contain that information."
-- Do not hallucinate.
-
-DOCUMENT CONTEXT:
-${contextText}
-
-QUESTION:
-${query}
-`;
-
-      const llmRes = await runLLM(finalPrompt, {
+    if (step.conditionType === 'boolean') {
+      const prompt = `Question:\n${context.results[0]?.input || ''}\n\nAnswer:\n${rawOutput}\n\nRespond only with true or false.`;
+      const aiResult = await runLLM(prompt, {
         provider: agent?.config?.provider,
         model: agent?.config?.model,
-        temperature: agent?.config?.temperature
+        temperature: 0,
       });
-
-      const result = {
-        stepId: step.stepId,
-        type: "document_query",
-        tool: "document",
-        input: query,
-        output: llmRes.text,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: query,
-        prompt: finalPrompt,
-        output: llmRes.text,
-        raw: llmRes.raw,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: query, output: llmRes.text };
-
-      return result;
+      evaluation = aiResult.text.toLowerCase().includes('true');
     }
-
-    // ----- CONDITION -----
-    if (step.type === "condition") {
-      const normalize = (val) => {
-        if (!val) return "";
-        return String(val)
-          .toLowerCase()
-          .trim()
-          .replace(/[\n\r]+/g, " ")
-          .replace(/[^\w\s]/g, "")
-          .replace(/\s+/g, " ");
-      };
-
-      const rawOutput = ctx.last?.output || "";
-      const text = normalize(rawOutput);
-      let evaluation = false;
-
-      try {
-        if (step.conditionType === "boolean") {
-          const userQuery = ctx.results[0]?.input || "";
-          const modelAnswer = ctx.last?.output || "";
-
-          const prompt = `You are a strict boolean evaluator.\n\nQuestion:\n${userQuery}\n\nAnswer:\n${modelAnswer}\n\nDoes the answer mean TRUE or FALSE?\n\nRespond ONLY with:\ntrue\nor\nfalse`;
-
-          const aiResult = await runLLM(prompt, {
-            provider: agent?.config?.provider,
-            model: agent?.config?.model,
-            temperature: 0,
-          });
-
-          evaluation = aiResult.text.toLowerCase().trim().includes("true");
-        } else if (step.conditionType === "sentiment") {
-          let result = null;
-          if (text.includes("positive")) result = true;
-          else if (text.includes("negative")) result = false;
-
-          if (result === null) {
-            const classification = await runLLM(`Reply ONLY "positive" or "negative".\n\nText:\n${rawOutput}`, {
-              provider: agent?.config?.provider,
-              model: agent?.config?.model,
-              temperature: 0,
-            });
-            result = normalize(classification.text).includes("positive");
-          }
-
-          evaluation = step.operator === "isPositive" ? result === true : result === false;
-        }
-      } catch (err) {
-        console.log("❌ Condition error:", err);
-        evaluation = false;
-      }
-
-      const result = {
-        stepId: step.stepId,
-        type: "condition",
-        output: evaluation,
-        branch: evaluation ? "true" : "false",
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: rawOutput,
-        prompt: null,
-        output: evaluation,
-        raw: { evaluation, branch: evaluation ? "true" : "false" },
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: rawOutput, output: evaluation };
-
-      return result;
-    }
-
-    // ----- SWITCH -----
-    if (step.type === "switch") {
-      const output = String(ctx.last?.output || "")
-        .toLowerCase()
-        .trim();
-
-      console.log("🔀 SWITCH INPUT:", output);
-
-      const result = {
-        stepId: step.stepId,
-        type: "switch",
-        tool: "switch",
-        input: output,
-        output: output,
-        caseValue: output,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: output,
-        prompt: null,
-        output: output,
-        raw: { caseValue: output },
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: output, output: output };
-
-      return result;
-    }
-
-    // ----- GITHUB -----
-    if (step.type === "github") {
-      try {
-        const output = await runGitHub(step, ctx, interpolate);
-        const result = {
-          stepId: step.stepId || null,
-          type: "github",
-          tool: "github",
-          input: { action: step.action },
-          output,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action: step.action },
-          prompt: null,
-          output,
-          raw: null,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action: step.action }, output };
-
-        return result;
-      } catch (err) {
-        const result = {
-          stepId: step.stepId || null,
-          type: "github",
-          tool: "github",
-          input: { action: step.action },
-          output: err.message,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action: step.action },
-          prompt: null,
-          output: err.message,
-          raw: err,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action: step.action }, output: err.message };
-
-        return result;
-      }
-    }
-
-    // ----- SLACK -----
-    if (step.type === "slack") {
-      try {
-        const output = await runSlack(step, ctx, interpolate);
-        const result = {
-          stepId: step.stepId || null,
-          type: "slack",
-          tool: "slack",
-          input: { action: step.action },
-          output,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action: step.action },
-          prompt: null,
-          output,
-          raw: null,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action: step.action }, output };
-
-        return result;
-      } catch (err) {
-        const result = {
-          stepId: step.stepId || null,
-          type: "slack",
-          tool: "slack",
-          input: { action: step.action },
-          output: err.message,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action: step.action },
-          prompt: null,
-          output: err.message,
-          raw: err,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action: step.action }, output: err.message };
-
-        return result;
-      }
-    }
-
-    // ----- DISCORD -----
-    if (step.type === "discord") {
-      try {
-        const output = await runDiscord(step, ctx, interpolate);
-        const result = {
-          stepId: step.stepId || null,
-          type: "discord",
-          tool: "discord",
-          input: { action: step.action },
-          output,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action: step.action },
-          prompt: null,
-          output,
-          raw: null,
-          success: true,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action: step.action }, output };
-
-        return result;
-      } catch (err) {
-        const result = {
-          stepId: step.stepId || null,
-          type: "discord",
-          tool: "discord",
-          input: { action: step.action },
-          output: err.message,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        };
-
-        ctx.registerStep(step.stepId || step.name, step.alias, {
-          input: { action: step.action },
-          prompt: null,
-          output: err.message,
-          raw: err,
-          success: false,
-          timestamp: new Date(),
-          duration: Date.now() - start,
-        });
-
-        ctx.results.push(result);
-        ctx.last = { input: { action: step.action }, output: err.message };
-
-        return result;
-      }
-    }
-
-    // ----- MCP TOOL -----
-    if (step.type === "mcp") {
-      const toolName = step.toolName || step.name;
-      const args = step.args || {};
-
-      const resolvedArgs = {};
-      for (const [key, value] of Object.entries(args)) {
-        resolvedArgs[key] = typeof value === "string" ? interpolate(value, ctx) : value;
-      }
-
-      const result = await invokeMcpTool(toolName, resolvedArgs, ctx);
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: resolvedArgs,
-        prompt: null,
-        output: result,
-        raw: result,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: resolvedArgs, output: result };
-
-      return result;
-    }
-
-    // ----- PARALLEL / JOIN -----
-    if (step.type === "parallel") {
-      const result = {
-        stepId: step.stepId || null,
-        type: "parallel",
-        tool: "parallel",
-        input: "Parallel Execution Start",
-        output: "Branching...",
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: "Parallel Execution Start",
-        prompt: null,
-        output: "Branching...",
-        raw: null,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: "Parallel Execution Start", output: "Branching..." };
-
-      return result;
-    }
-
-    if (step.type === "join") {
-      const outputMsg = ctx.last?.output || "Branches Merged";
-      const result = {
-        stepId: step.stepId || null,
-        type: "join",
-        tool: "join",
-        input: "Merging Branches",
-        output: outputMsg,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      };
-
-      ctx.registerStep(step.stepId || step.name, step.alias, {
-        input: "Merging Branches",
-        prompt: null,
-        output: outputMsg,
-        raw: null,
-        success: true,
-        timestamp: new Date(),
-        duration: Date.now() - start,
-      });
-
-      ctx.results.push(result);
-      ctx.last = { input: "Merging Branches", output: outputMsg };
-
-      return result;
-    }
-
-    // ----- UNKNOWN STEP TYPE -----
-    const result = {
-      stepId: step.stepId || null,
-      type: step.type || "unknown",
-      tool: step.tool || "unknown",
-      input: null,
-      output: `Unknown step type: ${step.type}`,
-      success: false,
+    return {
+      stepId: validatedStepId,
+      type: 'condition',
+      output: evaluation,
+      branch: evaluation ? 'true' : 'false',
+      success: true,
       timestamp: new Date(),
-      duration: Date.now() - start,
     };
-
-    ctx.registerStep(step.stepId || step.name, step.alias, {
-      input: null,
-      prompt: null,
-      output: `Unknown step type: ${step.type}`,
-      raw: null,
-      success: false,
-      timestamp: new Date(),
-      duration: Date.now() - start,
-    });
-
-    ctx.results.push(result);
-    ctx.last = { input: null, output: `Unknown step type: ${step.type}` };
-
-    return result;
-
-  } catch (err) {
-    const result = {
-      stepId: step.stepId || null,
-      type: step.type || "unknown",
-      tool: step.tool || "unknown",
-      input: "[error]",
-      output: err.message,
-      success: false,
-      error: (err && err.stack) ? String(err.stack).slice(0, 2000) : undefined,
-      timestamp: new Date(),
-      duration: Date.now() - start,
-    };
-
-    ctx.registerStep(step.stepId || step.name, step.alias, {
-      input: "[error]",
-      prompt: null,
-      output: err.message,
-      raw: err,
-      success: false,
-      timestamp: new Date(),
-      duration: Date.now() - start,
-    });
-
-    ctx.results.push(result);
-    ctx.last = { input: "[error]", output: err.message };
-
-    return result;
   }
+
+  if (stepType === 'switch') {
+    const output = String(context.last?.output || '').toLowerCase().trim();
+    return {
+      stepId: validatedStepId,
+      type: 'switch',
+      tool: 'switch',
+      input: output,
+      output,
+      caseValue: output,
+      success: true,
+      timestamp: new Date(),
+    };
+  }
+
+  if (stepType === 'mcp') {
+    const execution = await invokeMcpTool({
+      userId: context.userId,
+      serverId: step.serverId,
+      toolName: step.toolName,
+      argumentsInput: step.arguments,
+      context,
+      interpolate,
+      timeoutMs: finalTimeoutMs,
+    });
+    return {
+      stepId: validatedStepId,
+      type: 'mcp',
+      tool: 'mcp',
+      output: execution.result,
+      success: true,
+      timestamp: new Date(),
+    };
+  }
+
+  return {
+    stepId: validatedStepId,
+    type: step.type || 'unknown',
+    tool: step.tool || 'unknown',
+    input: null,
+    output: `Unknown step type or missing tool registry mapping: ${step.type}`,
+    success: false,
+    timestamp: new Date(),
+  };
 }
 
 module.exports = { executeStep };
