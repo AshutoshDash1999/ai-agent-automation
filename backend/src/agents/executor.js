@@ -880,6 +880,64 @@ ${query}
       return result;
     }
 
+    // ----- PARALLEL / JOIN -----
+    if (step.type === "parallel") {
+      const result = {
+        stepId: step.stepId || null,
+        type: "parallel",
+        tool: "parallel",
+        input: "Parallel Execution Start",
+        output: "Branching...",
+        success: true,
+        timestamp: new Date(),
+        duration: Date.now() - start,
+      };
+
+      ctx.registerStep(step.stepId || step.name, step.alias, {
+        input: "Parallel Execution Start",
+        prompt: null,
+        output: "Branching...",
+        raw: null,
+        success: true,
+        timestamp: new Date(),
+        duration: Date.now() - start,
+      });
+
+      ctx.results.push(result);
+      ctx.last = { input: "Parallel Execution Start", output: "Branching..." };
+
+      return result;
+    }
+
+    if (step.type === "join") {
+      const outputMsg = ctx.last?.output || "Branches Merged";
+      const result = {
+        stepId: step.stepId || null,
+        type: "join",
+        tool: "join",
+        input: "Merging Branches",
+        output: outputMsg,
+        success: true,
+        timestamp: new Date(),
+        duration: Date.now() - start,
+      };
+
+      ctx.registerStep(step.stepId || step.name, step.alias, {
+        input: "Merging Branches",
+        prompt: null,
+        output: outputMsg,
+        raw: null,
+        success: true,
+        timestamp: new Date(),
+        duration: Date.now() - start,
+      });
+
+      ctx.results.push(result);
+      ctx.last = { input: "Merging Branches", output: outputMsg };
+
+      return result;
+    }
+
     // ----- UNKNOWN STEP TYPE -----
     const result = {
       stepId: step.stepId || null,
