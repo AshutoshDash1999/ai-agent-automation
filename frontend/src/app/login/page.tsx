@@ -92,6 +92,14 @@ export default function LoginPage() {
             Create one
           </a>
         </div>
+
+        <div className="mt-3 text-center text-xs text-muted-foreground">
+          By signing in, you agree to the platform&apos;s
+          <a href="/privacy" className="ml-1 font-medium text-primary hover:underline">
+            Privacy Policy
+          </a>
+          .
+        </div>
       </Card>
     </div>
   );

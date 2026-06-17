@@ -102,6 +102,14 @@ export default function RegisterPage() {
             Sign in
           </a>
         </div>
+
+        <div className="mt-3 text-center text-xs text-muted-foreground">
+          By creating an account, you agree to the platform&apos;s
+          <a href="/privacy" className="ml-1 font-medium text-primary hover:underline">
+            Privacy Policy
+          </a>
+          .
+        </div>
       </Card>
     </div>
   );
