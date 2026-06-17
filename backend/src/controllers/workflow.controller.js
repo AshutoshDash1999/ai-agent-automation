@@ -442,7 +442,6 @@ async function cloneWorkflow(req, res) {
   }
 }
 
-<<<<<<< HEAD
 async function getNodeDefinitions(req, res) {
   try {
     const tools = getToolMetadata();
